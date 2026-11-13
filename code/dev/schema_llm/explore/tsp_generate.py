@@ -16,6 +16,34 @@ import pyarrow.parquet as pq
 from . import combined_primitives as cp
 
 
+def parse_task_indices(spec: str, total: int) -> list[int]:
+    """Parse an explicit ``--task-indices`` spec like ``"0-4,10,15-19"`` into 0-based indices.
+
+    Indices refer to task POSITION in the (ordered) tasks file, not ``uid``, so the same
+    spec always picks the same tasks regardless of which model/job interprets it.
+    """
+    indices: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start_s, end_s = part.split("-", 1)
+            start, end = int(start_s), int(end_s)
+            if start > end:
+                raise ValueError(f"invalid --task-indices range (start > end): {part}")
+            span = range(start, end + 1)
+        else:
+            span = [int(part)]
+        for i in span:
+            if not 0 <= i < total:
+                raise ValueError(f"--task-indices out of range [0, {total}): {i}")
+            indices.add(i)
+    if not indices:
+        raise ValueError("--task-indices parsed to an empty set")
+    return sorted(indices)
+
+
 def load_tasks(path: Path) -> list[dict]:
     tasks = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     seen = set()
@@ -182,13 +210,31 @@ def run(
     device: str,
     seed: int = 0,
     smoke: bool = False,
-) -> Path:
+    task_indices: list[int] | None = None,
+) -> Path | None:
+    """Generate this job's explicit subset of tasks, then build the pack iff it's everything.
+
+    ``task_indices`` (0-based positions in the tasks file, e.g. from
+    ``parse_task_indices``) selects which tasks THIS process generates, for BOTH models --
+    sharding never splits by model. It is not part of ``config``, so partial runs over
+    different index subsets of the SAME tasks file/settings keep validating against each
+    other. The pack requires every task/model pair, so it is only built when
+    ``task_indices`` is ``None`` (the default, and the final merge invocation after every
+    partial run has finished).
+    """
     from ..core.model import generate_reply, load_model, set_seed
     from .reproduction import _runtime
 
     tasks = load_tasks(tasks_path)
     if smoke:
         tasks = tasks[:2]
+    if task_indices is None:
+        work_tasks = tasks
+    else:
+        bad = [i for i in task_indices if not 0 <= i < len(tasks)]
+        if bad:
+            raise ValueError(f"task index out of range [0, {len(tasks)}): {bad}")
+        work_tasks = [tasks[i] for i in task_indices]
     template_path = root / "data/tsp_generation/phi4_mini_instruct_chat_template.jinja"
     config = {
         "release": cp._sha(root / "MANIFEST.json"),
@@ -220,7 +266,7 @@ def run(
     rows = []
     for model, (checkpoint, revision) in cp.MODELS.items():
         lm = None
-        for task in tasks:
+        for task in work_tasks:
             path = shard_path(out, model, task["uid"])
             if path.exists():
                 row = cp._json(path)
@@ -268,6 +314,13 @@ def run(
         import torch
 
         torch.cuda.empty_cache()
+    if task_indices is not None:
+        print(
+            f"task indices {task_indices} complete: {len(rows)} rows written/verified; "
+            "pack not built (rerun with no --task-indices once every subset has finished).",
+            flush=True,
+        )
+        return None
     return write_pack(root, out, tasks, rows, config)
 
 
@@ -283,6 +336,12 @@ def main() -> None:
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--check-only", action="store_true")
     p.add_argument("--smoke", action="store_true")
+    p.add_argument(
+        "--task-indices",
+        help="only generate these 0-based positions in --tasks, for BOTH models (sharding "
+        "never splits by model), e.g. '0-4,10,15-19'; skips building the pack. Omit for "
+        "the full run (default), which builds OUT/pack/ once every subset is cached.",
+    )
     args = p.parse_args()
     root = args.root.resolve()
     os.chdir(root)
@@ -293,6 +352,12 @@ def main() -> None:
     rows = load_tasks(tasks)
     if args.max_new_tokens <= 0:
         p.error("--max-new-tokens must be positive")
+    task_indices = None
+    if args.task_indices:
+        try:
+            task_indices = parse_task_indices(args.task_indices, len(rows))
+        except ValueError as e:
+            p.error(str(e))
     if args.check_only:
         print(
             f"TSP inputs verified: {len(rows)} tasks, {2 * len(rows)} responses planned; "
@@ -316,8 +381,15 @@ def main() -> None:
         args.device,
         args.seed,
         args.smoke,
+        task_indices,
     )
-    print(f"Primitive input pack ready: {pack}")
+    if pack is None:
+        print(
+            f"Task indices {task_indices} done; rerun with no --task-indices once every "
+            "subset finishes to build the pack."
+        )
+    else:
+        print(f"Primitive input pack ready: {pack}")
 
 
 if __name__ == "__main__":
