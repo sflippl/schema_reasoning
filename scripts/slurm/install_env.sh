@@ -17,6 +17,12 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
+# The repo pins 3.12 via .python-version (torch's locked version has no wheel for very
+# new interpreters -- e.g. 3.15 -- so `requires-python = ">=3.11"`'s floor alone isn't
+# enough). Make sure it's actually installed rather than relying on uv finding one.
+echo "Ensuring Python 3.12 is available ..."
+uv python install 3.12
+
 export PYTHONHASHSEED=0
 # Override with a shared/project storage path before running this script, e.g.:
 #   export HF_HOME=/storage/huggingface
