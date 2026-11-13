@@ -23,7 +23,14 @@ export PYTHONPATH="$ROOT/code${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONHASHSEED=0
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export NVIDIA_TF32_OVERRIDE=0
-export HF_HOME="${HF_HOME:?set HF_HOME to the shared Hugging Face cache from install_env.sh}"
+# Must match whatever install_env.sh actually populated. Defaults the same way that
+# script does, so this works even if HF_HOME was never exported/passed through --export.
+export HF_HOME="${HF_HOME:-$ROOT/.cache/huggingface}"
+# Enforce offline (see tsp_generate_array.sbatch for why): the merge job typically only
+# reads already-cached shards and never even touches a model, but if it does need to
+# regenerate a missing one, it must not silently hit the network either.
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 
 uv run --no-sync python -m dev.schema_llm.explore.tsp_generate \
   --root "$ROOT" \

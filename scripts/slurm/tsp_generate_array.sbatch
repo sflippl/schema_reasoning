@@ -52,8 +52,14 @@ export PYTHONPATH="$ROOT/code${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONHASHSEED=0
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export NVIDIA_TF32_OVERRIDE=0
-# Must match the shared cache populated by install_env.sh so no node needs internet access.
-export HF_HOME="${HF_HOME:?set HF_HOME to the shared Hugging Face cache from install_env.sh}"
+# Must match whatever install_env.sh actually populated. Defaults the same way that
+# script does, so this works even if HF_HOME was never exported/passed through --export.
+export HF_HOME="${HF_HOME:-$ROOT/.cache/huggingface}"
+# Enforce offline: run scripts/slurm/install_env.sh (or warm_model_cache.sh) first. With
+# this set, a cold/incomplete cache fails immediately with a clear error instead of each
+# of the (potentially 20+) concurrent array tasks silently racing to hit the Hub.
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 
 # --no-sync: the environment is pre-built by install_env.sh; do not race `uv sync` across
 # the concurrently-starting array tasks.

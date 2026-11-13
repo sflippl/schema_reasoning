@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Run ONCE on a node with internet access (typically the cluster login node) before
 # submitting any TSP generation jobs. It builds the locked `uv` environment under
-# .venv/ and pre-downloads the two pinned model checkpoints, so the GPU compute nodes
-# running the Slurm array in tsp_generate_array.sbatch can work fully offline.
+# .venv/ and pre-downloads+verifies the two pinned model checkpoints (via
+# warm_model_cache.sh), so the GPU compute nodes running the Slurm array in
+# tsp_generate_array.sbatch can work fully offline (they run with HF_HUB_OFFLINE=1).
 #
 # Assumes $ROOT (this repo checkout) lives on storage shared between the login node and
 # compute nodes (e.g. NFS/Lustre home or project space) -- `uv sync` is NOT re-run per
@@ -35,20 +36,8 @@ echo "Syncing locked environment (extras: gpu, api) into $ROOT/.venv ..."
 # baukit dependency from GitHub (git+https://github.com/davidbau/baukit).
 uv sync --locked --extra gpu --extra api
 
-echo "Pre-downloading pinned checkpoints into HF_HOME=$HF_HOME ..."
-uv run --no-sync python - <<'PY'
-from huggingface_hub import snapshot_download
-
-# Keep in sync with MODELS in code/dev/schema_llm/explore/combined_primitives.py.
-CHECKPOINTS = [
-    ("microsoft/Phi-4-mini-reasoning", "0e3b1e2d02ee478a3743abe3f629e9c0cb722e0a"),
-    ("Qwen/Qwen3-4B", "1cfa9a7208912126459214e8b04321603b3df60c"),
-]
-for repo_id, revision in CHECKPOINTS:
-    print(f"Fetching {repo_id}@{revision} ...", flush=True)
-    snapshot_download(repo_id=repo_id, revision=revision)
-print("All checkpoints cached.")
-PY
+echo "Pre-downloading and verifying pinned checkpoints into HF_HOME=$HF_HOME ..."
+HF_HOME="$HF_HOME" bash "$ROOT/scripts/slurm/warm_model_cache.sh"
 
 echo "Validating release inputs (no GPU/weights touched by this check) ..."
 uv run --no-sync python -m dev.schema_llm.explore.tsp_generate --root "$ROOT" --check-only

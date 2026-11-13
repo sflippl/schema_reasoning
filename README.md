@@ -221,16 +221,27 @@ contiguous block of tasks (e.g. 100 tasks over 20 array tasks = `--task-indices 
 10 responses per job):
 
 ```bash
-# Once, on a node with internet access: builds .venv and pre-downloads both pinned
-# checkpoints so the array's GPU nodes can run offline.
+# Once, on a node with internet access: builds .venv (scripts/slurm/install_env.sh), then
+# downloads AND verifies both pinned checkpoints through the SAME load path
+# tsp_generate.py uses (scripts/slurm/warm_model_cache.sh, called automatically).
+# Defaults HF_HOME to $ROOT/.cache/huggingface if unset; override to use shared/project
+# storage instead.
 bash scripts/slurm/install_env.sh
 
 # Submits a 20-task array (tsp_generate_array.sbatch) plus a merge job that depends on
-# it (tsp_generate_merge.sbatch, --dependency=afterok). SLURM_ACCOUNT/SLURM_PARTITION
-# are optional -- omit either (or both) if your cluster has a default
-# partition/no billing account, and sbatch will use its defaults.
-HF_HOME=/storage/huggingface bash scripts/slurm/submit_tsp_generation.sh
+# it (tsp_generate_merge.sbatch, --dependency=afterok). Nothing here is required:
+# SLURM_ACCOUNT/SLURM_PARTITION are omitted from sbatch if unset (your cluster's
+# defaults apply), and HF_HOME defaults the same way install_env.sh does -- only set it
+# if you pointed install_env.sh at a different location.
+bash scripts/slurm/submit_tsp_generation.sh
 ```
+
+Both generation jobs run with `HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1`, so they never touch
+the network -- once `install_env.sh` has warmed `HF_HOME`, there's no window where several
+concurrent array tasks could end up racing to download the same multi-GB checkpoint, and a
+genuinely incomplete cache fails each job immediately with a clear error instead of hanging or
+silently retrying. Re-run `scripts/slurm/warm_model_cache.sh` standalone any time you want to
+re-verify the cache (e.g. after clearing `HF_HOME` or moving to a new shared filesystem).
 
 Edit the `#SBATCH` resource directives in `scripts/slurm/*.sbatch` for your cluster (GPU request
 syntax, `--time`, `--mem`) before submitting. All jobs must use the same `--device` (`cuda:0`,

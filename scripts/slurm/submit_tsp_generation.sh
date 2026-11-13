@@ -7,21 +7,20 @@
 # Prerequisites: run scripts/slurm/install_env.sh once first (builds .venv, caches both
 # pinned checkpoints under HF_HOME).
 #
-# Required cluster setting -- edit or export before running:
-#   HF_HOME                          (shared cache populated by install_env.sh)
-#
-# Optional cluster settings -- omit to use your cluster's defaults:
-#   SLURM_ACCOUNT, SLURM_PARTITION   (sbatch --account/--partition; some clusters have a
-#                                      single default partition/no billing account, so
-#                                      sbatch doesn't need either flag)
-#
-# Optional overrides: ARRAY_SIZE (default 20), TSP_OUT, TSP_TASKS, TSP_MAX_NEW_TOKENS,
-# TSP_SEED.
+# Nothing is strictly required -- every setting below has a default. Edit/export before
+# running only to override them:
+#   HF_HOME                          (default: $ROOT/.cache/huggingface, matching
+#                                      install_env.sh's default -- override to point at
+#                                      shared/project storage instead of the repo clone)
+#   SLURM_ACCOUNT, SLURM_PARTITION   (sbatch --account/--partition; omitted entirely if
+#                                      unset, so your cluster's defaults apply)
+#   ARRAY_SIZE (default 20), TSP_OUT, TSP_TASKS, TSP_MAX_NEW_TOKENS, TSP_SEED
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SLURM_DIR="$ROOT/scripts/slurm"
 
-: "${HF_HOME:?set HF_HOME to the shared cache created by install_env.sh}"
+# Must match whatever install_env.sh actually populated -- same default as that script.
+HF_HOME="${HF_HOME:-$ROOT/.cache/huggingface}"
 
 # Only pass --account/--partition through to sbatch if you actually set them.
 SBATCH_ACCOUNT_ARGS=()
