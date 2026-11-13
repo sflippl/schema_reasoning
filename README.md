@@ -41,6 +41,7 @@ seed stream. Do not run both jobs concurrently on one GPU without checking capac
 | `scripts/merge_primitives.sh` | Merge completed extractions and export shared assignments |
 | `scripts/generate_tsp_responses.sh` | Generate TSP responses and an extraction input pack |
 | `scripts/run_vstop.sh` | Reproduce schema/TSP STOP experiments using supplied vectors |
+| `scripts/slurm/` | Shard TSP generation across a Slurm array (see below) |
 
 As an alternative, `bash scripts/run_primitives.sh --out /storage/primitives` performs capture,
 extraction, merging and export in one command. This also saves reusable extraction results.
@@ -201,6 +202,46 @@ Changed prompts, budgets, settings or runtime require a new output folder.
 and runtime. `OUT/shards/` contains exact generated token IDs, prompt boundaries and per-response
 seeds. `OUT/pack/` is the ready-to-use normalized input, including text, token IDs, metadata and
 flags for hitting the cap, termination and closed thinking. Save these files for later extraction.
+
+### Parallelizing generation across a Slurm cluster
+
+`--task-indices SPEC` (e.g. `"0-4,10,15-19"`, 0-based positions in the `--tasks` file) makes one
+invocation generate only those tasks, for BOTH pinned models -- sharding never splits by model,
+only by task -- while still writing shards under the SAME `--out`/`--tasks` as every other job:
+the on-disk `generation.json` fingerprint is based on the full tasks file, not which subset was
+generated, so partial runs over disjoint `--task-indices` keep validating against each other. A
+partial run (`--task-indices` given) writes its shards and returns without building `OUT/pack/`,
+since a partial task set can't satisfy the per-model response-count check in
+`combined_primitives.verify`. Rerun with no `--task-indices` (the default) once every subset has
+finished: it finds every shard already cached (no weights loaded, no GPU work) and builds the
+final pack.
+
+`scripts/slurm/` wraps this into a ready-to-submit array, where each array task gets an explicit,
+contiguous block of tasks (e.g. 100 tasks over 20 array tasks = `--task-indices 0-4`, `5-9`, ...,
+10 responses per job):
+
+```bash
+# Once, on a node with internet access: builds .venv and pre-downloads both pinned
+# checkpoints so the array's GPU nodes can run offline.
+bash scripts/slurm/install_env.sh
+
+# Submits a 20-task array (tsp_generate_array.sbatch) plus a merge job that depends on
+# it (tsp_generate_merge.sbatch, --dependency=afterok).
+SLURM_ACCOUNT=my-account SLURM_PARTITION=gpu HF_HOME=/storage/huggingface \
+  bash scripts/slurm/submit_tsp_generation.sh
+```
+
+Edit the `#SBATCH` resource directives in `scripts/slurm/*.sbatch` for your cluster (GPU request
+syntax, `--time`, `--mem`) before submitting. All jobs must use the same `--device` (`cuda:0`,
+since Slurm scopes `CUDA_VISIBLE_DEVICES` per job already), `--tasks`, `--out`, `--max-new-tokens`
+and `--seed` -- `submit_tsp_generation.sh` keeps these consistent across the array and the merge
+job automatically.
+
+`tsp_generate_array.sbatch` is a standard Slurm array job: `#SBATCH --array=0-19` is the actual
+sharding knob (edit it directly, or override with `sbatch --array=0-N`/`submit_tsp_generation.sh`'s
+`ARRAY_SIZE`). Each array task computes its own contiguous `--task-indices` block from
+`$SLURM_ARRAY_TASK_ID`, the array's size (`$SLURM_ARRAY_TASK_COUNT`) and the task count -- there
+is no separate index/shard count to keep in sync with the array range.
 
 To supply different problems, pass `--tasks /path/tasks.jsonl`. Each line needs a unique `uid`
 and a nonempty `prompt`; optional problem metadata is retained. The default task list is
