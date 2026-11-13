@@ -7,9 +7,13 @@
 # Prerequisites: run scripts/slurm/install_env.sh once first (builds .venv, caches both
 # pinned checkpoints under HF_HOME).
 #
-# Required cluster settings -- edit these or export them before running:
-#   SLURM_ACCOUNT, SLURM_PARTITION   (sbatch --account/--partition for your cluster)
+# Required cluster setting -- edit or export before running:
 #   HF_HOME                          (shared cache populated by install_env.sh)
+#
+# Optional cluster settings -- omit to use your cluster's defaults:
+#   SLURM_ACCOUNT, SLURM_PARTITION   (sbatch --account/--partition; some clusters have a
+#                                      single default partition/no billing account, so
+#                                      sbatch doesn't need either flag)
 #
 # Optional overrides: ARRAY_SIZE (default 20), TSP_OUT, TSP_TASKS, TSP_MAX_NEW_TOKENS,
 # TSP_SEED.
@@ -17,9 +21,13 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SLURM_DIR="$ROOT/scripts/slurm"
 
-: "${SLURM_ACCOUNT:?set SLURM_ACCOUNT to your Slurm billing account}"
-: "${SLURM_PARTITION:?set SLURM_PARTITION to your GPU partition}"
 : "${HF_HOME:?set HF_HOME to the shared cache created by install_env.sh}"
+
+# Only pass --account/--partition through to sbatch if you actually set them.
+SBATCH_ACCOUNT_ARGS=()
+[ -n "${SLURM_ACCOUNT:-}" ] && SBATCH_ACCOUNT_ARGS+=(--account="$SLURM_ACCOUNT")
+SBATCH_PARTITION_ARGS=()
+[ -n "${SLURM_PARTITION:-}" ] && SBATCH_PARTITION_ARGS+=(--partition="$SLURM_PARTITION")
 
 ARRAY_SIZE="${ARRAY_SIZE:-20}"
 TSP_OUT="${TSP_OUT:-$ROOT/results/tsp-generation}"
@@ -33,7 +41,7 @@ export_vars="ALL,TSP_ROOT=$ROOT,TSP_OUT=$TSP_OUT,TSP_TASKS=$TSP_TASKS"
 export_vars+=",TSP_MAX_NEW_TOKENS=$TSP_MAX_NEW_TOKENS,TSP_SEED=$TSP_SEED,HF_HOME=$HF_HOME"
 
 ARRAY_JOB=$(sbatch --parsable \
-  --account="$SLURM_ACCOUNT" --partition="$SLURM_PARTITION" \
+  "${SBATCH_ACCOUNT_ARGS[@]}" "${SBATCH_PARTITION_ARGS[@]}" \
   --array="0-$((ARRAY_SIZE - 1))" \
   --chdir="$SLURM_DIR" \
   --export="${export_vars}" \
@@ -41,7 +49,7 @@ ARRAY_JOB=$(sbatch --parsable \
 echo "submitted array job $ARRAY_JOB (0-$((ARRAY_SIZE - 1)), $ARRAY_SIZE array tasks)"
 
 MERGE_JOB=$(sbatch --parsable \
-  --account="$SLURM_ACCOUNT" --partition="$SLURM_PARTITION" \
+  "${SBATCH_ACCOUNT_ARGS[@]}" "${SBATCH_PARTITION_ARGS[@]}" \
   --dependency="afterok:$ARRAY_JOB" \
   --chdir="$SLURM_DIR" \
   --export="$export_vars" \

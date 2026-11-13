@@ -226,9 +226,10 @@ contiguous block of tasks (e.g. 100 tasks over 20 array tasks = `--task-indices 
 bash scripts/slurm/install_env.sh
 
 # Submits a 20-task array (tsp_generate_array.sbatch) plus a merge job that depends on
-# it (tsp_generate_merge.sbatch, --dependency=afterok).
-SLURM_ACCOUNT=my-account SLURM_PARTITION=gpu HF_HOME=/storage/huggingface \
-  bash scripts/slurm/submit_tsp_generation.sh
+# it (tsp_generate_merge.sbatch, --dependency=afterok). SLURM_ACCOUNT/SLURM_PARTITION
+# are optional -- omit either (or both) if your cluster has a default
+# partition/no billing account, and sbatch will use its defaults.
+HF_HOME=/storage/huggingface bash scripts/slurm/submit_tsp_generation.sh
 ```
 
 Edit the `#SBATCH` resource directives in `scripts/slurm/*.sbatch` for your cluster (GPU request
