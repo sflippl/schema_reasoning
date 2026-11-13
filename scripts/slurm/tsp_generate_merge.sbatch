@@ -19,6 +19,15 @@ MAX_NEW_TOKENS="${TSP_MAX_NEW_TOKENS:-32768}"
 SEED="${TSP_SEED:-0}"
 
 cd "$ROOT"
+
+# Optional safety net: if your cluster's job startup doesn't inherit PATH/CONDA_* from
+# the submitting shell (submit_tsp_generation.sh exports --export=ALL, which usually
+# covers this), set CONDA_ENV=<env name> when submitting to explicitly reactivate it here.
+if [ -n "${CONDA_ENV:-}" ]; then
+  eval "$(conda shell.bash hook)"
+  conda activate "$CONDA_ENV"
+fi
+
 export PYTHONPATH="$ROOT/code${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONHASHSEED=0
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
@@ -32,7 +41,9 @@ export HF_HOME="${HF_HOME:-$ROOT/.cache/huggingface}"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
-uv run --no-sync python -m dev.schema_llm.explore.tsp_generate \
+# Assumes the active python environment (see install_env.sh / CONDA_ENV above) already
+# has every dependency this repo needs -- no environment install/sync happens here.
+python -m dev.schema_llm.explore.tsp_generate \
   --root "$ROOT" \
   --tasks "$TASKS" \
   --out "$OUT" \

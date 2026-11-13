@@ -221,18 +221,22 @@ contiguous block of tasks (e.g. 100 tasks over 20 array tasks = `--task-indices 
 10 responses per job):
 
 ```bash
-# Once, on a node with internet access: builds .venv (scripts/slurm/install_env.sh), then
-# downloads AND verifies both pinned checkpoints through the SAME load path
-# tsp_generate.py uses (scripts/slurm/warm_model_cache.sh, called automatically).
-# Defaults HF_HOME to $ROOT/.cache/huggingface if unset; override to use shared/project
-# storage instead.
+# Once, from your already-activated Python environment (e.g. `conda activate <env>`)
+# that already has this repo's deps (see the gpu/api extras in pyproject.toml), on a
+# node with internet access: verifies that environment, then downloads AND verifies both
+# pinned checkpoints through the SAME load path tsp_generate.py uses
+# (scripts/slurm/warm_model_cache.sh, called automatically). Defaults HF_HOME to
+# $ROOT/.cache/huggingface if unset; override to use shared/project storage instead.
 bash scripts/slurm/install_env.sh
 
-# Submits a 20-task array (tsp_generate_array.sbatch) plus a merge job that depends on
-# it (tsp_generate_merge.sbatch, --dependency=afterok). Nothing here is required:
-# SLURM_ACCOUNT/SLURM_PARTITION are omitted from sbatch if unset (your cluster's
-# defaults apply), and HF_HOME defaults the same way install_env.sh does -- only set it
-# if you pointed install_env.sh at a different location.
+# Submit from this SAME activated shell (--export=ALL below carries its PATH/CONDA_*
+# into every Slurm job). Submits a 20-task array (tsp_generate_array.sbatch) plus a
+# merge job that depends on it (tsp_generate_merge.sbatch, --dependency=afterok).
+# Nothing here is required: SLURM_ACCOUNT/SLURM_PARTITION are omitted from sbatch if
+# unset (your cluster's defaults apply), and HF_HOME defaults the same way
+# install_env.sh does. If your cluster's job startup does NOT inherit PATH/CONDA_* via
+# --export=ALL, set CONDA_ENV=<env name> too -- both .sbatch files will explicitly
+# `conda activate` it.
 bash scripts/slurm/submit_tsp_generation.sh
 ```
 

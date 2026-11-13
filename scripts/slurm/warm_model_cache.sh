@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run ONCE on a node with internet access (install_env.sh calls this automatically after
-# `uv sync`; rerun it standalone any time you want to re-verify the cache, e.g. after
+# Run ONCE, from your already-activated Python environment (install_env.sh calls this
+# automatically; rerun it standalone any time you want to re-verify the cache, e.g. after
 # clearing HF_HOME or moving to a new shared filesystem).
 #
 # Downloads AND fully exercises both pinned checkpoints through the SAME load path
@@ -23,7 +23,7 @@ mkdir -p "$HF_HOME"
 export PYTHONPATH="$ROOT/code${PYTHONPATH:+:$PYTHONPATH}"
 
 echo "Warming HF_HOME=$HF_HOME by loading both pinned checkpoints on CPU ..."
-uv run --no-sync python - <<'PY'
+python - <<'PY'
 from dev.schema_llm.core.model import load_model
 from dev.schema_llm.explore.combined_primitives import MODELS
 

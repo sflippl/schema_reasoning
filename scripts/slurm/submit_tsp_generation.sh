@@ -4,8 +4,10 @@
 # job that depends on it (--dependency=afterok) and assembles the final pack once every
 # array task is done.
 #
-# Prerequisites: run scripts/slurm/install_env.sh once first (builds .venv, caches both
-# pinned checkpoints under HF_HOME).
+# Prerequisites: run scripts/slurm/install_env.sh once first, FROM YOUR ACTIVATED PYTHON
+# ENVIRONMENT (e.g. `conda activate <env>`) -- it verifies that environment and caches
+# both pinned checkpoints under HF_HOME. Run THIS script from that same activated shell
+# too: --export=ALL below already carries its PATH/CONDA_* into every Slurm job.
 #
 # Nothing is strictly required -- every setting below has a default. Edit/export before
 # running only to override them:
@@ -14,6 +16,10 @@
 #                                      shared/project storage instead of the repo clone)
 #   SLURM_ACCOUNT, SLURM_PARTITION   (sbatch --account/--partition; omitted entirely if
 #                                      unset, so your cluster's defaults apply)
+#   CONDA_ENV                        (only needed if your cluster's job startup does NOT
+#                                      inherit PATH/CONDA_* from --export=ALL -- set to
+#                                      the env name and both .sbatch files will
+#                                      explicitly `conda activate` it)
 #   ARRAY_SIZE (default 20), TSP_OUT, TSP_TASKS, TSP_MAX_NEW_TOKENS, TSP_SEED
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)

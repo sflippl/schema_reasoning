@@ -33,6 +33,14 @@ ARRAY_SIZE="${SLURM_ARRAY_TASK_COUNT:-${TSP_ARRAY_SIZE:?set TSP_ARRAY_SIZE if yo
 
 cd "$ROOT"
 
+# Optional safety net: if your cluster's job startup doesn't inherit PATH/CONDA_* from
+# the submitting shell (submit_tsp_generation.sh exports --export=ALL, which usually
+# covers this), set CONDA_ENV=<env name> when submitting to explicitly reactivate it here.
+if [ -n "${CONDA_ENV:-}" ]; then
+  eval "$(conda shell.bash hook)"
+  conda activate "$CONDA_ENV"
+fi
+
 # Non-empty lines, matching tsp_generate.load_tasks's own `if line.strip()` filter.
 TOTAL_TASKS=$(grep -c '.' "$TASKS")
 CHUNK=$(((TOTAL_TASKS + ARRAY_SIZE - 1) / ARRAY_SIZE))
@@ -61,9 +69,9 @@ export HF_HOME="${HF_HOME:-$ROOT/.cache/huggingface}"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
-# --no-sync: the environment is pre-built by install_env.sh; do not race `uv sync` across
-# the concurrently-starting array tasks.
-uv run --no-sync python -m dev.schema_llm.explore.tsp_generate \
+# Assumes the active python environment (see install_env.sh / CONDA_ENV above) already
+# has every dependency this repo needs -- no environment install/sync happens here.
+python -m dev.schema_llm.explore.tsp_generate \
   --root "$ROOT" \
   --tasks "$TASKS" \
   --out "$OUT" \
