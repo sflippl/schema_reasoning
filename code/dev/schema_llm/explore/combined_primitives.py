@@ -10,9 +10,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
+import uuid
 from itertools import groupby
 from pathlib import Path
 
@@ -80,7 +82,13 @@ def _json(path: Path) -> dict:
 
 def _write_json(path: Path, value: dict | list) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
+    # A fixed "<name>.tmp" path lets concurrent writers to the SAME destination (e.g. a
+    # Slurm array where every task writes one shared state file at startup) race to
+    # open/truncate/rename the identical temp file; one writer's rename can invalidate
+    # another's still-open handle to it, which NFS surfaces as ESTALE ("Stale file
+    # handle"). Suffix with pid+a random token so concurrent writers never share a temp
+    # path -- the final `replace()` onto the real path stays atomic either way.
+    temp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     temp.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
     temp.replace(path)
 

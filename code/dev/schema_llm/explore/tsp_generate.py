@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import shutil
+import uuid
 from pathlib import Path
 
 import pyarrow as pa
@@ -258,11 +259,25 @@ def run(
         "token_origin": "original-generation",
     }
     state = out / "generation.json"
-    if state.exists() and cp._json(state) != config:
-        raise ValueError("generation inputs/settings changed; choose a new output folder")
-    out.mkdir(parents=True, exist_ok=True)
-    cp._write_json(state, config)
-    shutil.copy2(tasks_path, out / "tasks.jsonl")
+    if state.exists():
+        if cp._json(state) != config:
+            raise ValueError("generation inputs/settings changed; choose a new output folder")
+    else:
+        # First job to see a fresh --out directory: write the settings fingerprint and
+        # copy the tasks file once. Guarding with `not state.exists()` (rather than
+        # writing unconditionally every run) keeps concurrently-started Slurm array tasks
+        # from all redundantly rewriting the same shared files on every invocation --
+        # _write_json's own per-writer-unique temp path still makes any remaining
+        # simultaneous-first-write race safe, this just shrinks how often it's exercised.
+        out.mkdir(parents=True, exist_ok=True)
+        cp._write_json(state, config)
+        # Copy via a uniquely-named temp file + atomic rename (shutil.copy2 writes the
+        # destination directly, so two array tasks racing to copy at the same instant
+        # could otherwise read a torn/partial write of each other's in-progress copy).
+        tasks_copy = out / "tasks.jsonl"
+        temp_copy = out / f"tasks.jsonl.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+        shutil.copy2(tasks_path, temp_copy)
+        temp_copy.replace(tasks_copy)
     rows = []
     for model, (checkpoint, revision) in cp.MODELS.items():
         lm = None
