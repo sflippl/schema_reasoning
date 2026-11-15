@@ -28,11 +28,15 @@ SLURM_DIR="$ROOT/scripts/slurm"
 # Must match whatever install_env.sh actually populated -- same default as that script.
 HF_HOME="${HF_HOME:-$ROOT/.cache/huggingface}"
 
-# Only pass --account/--partition through to sbatch if you actually set them.
+# Only pass --account/--partition through to sbatch if you actually set them. The
+# ${arr[@]+...} form (not just "${arr[@]}") is required: bash before 4.4 treats
+# expanding an EMPTY array under `set -u` as an unbound-variable error, and HPC login
+# nodes commonly still ship bash 4.2 (e.g. stock on RHEL7/8) -- this form is the
+# portable way to expand "nothing" for an empty array on every bash version.
 SBATCH_ACCOUNT_ARGS=()
-[ -n "${SLURM_ACCOUNT:-}" ] && SBATCH_ACCOUNT_ARGS+=(--account="$SLURM_ACCOUNT")
+[ -n "${SLURM_ACCOUNT:-}" ] && SBATCH_ACCOUNT_ARGS=(--account="$SLURM_ACCOUNT")
 SBATCH_PARTITION_ARGS=()
-[ -n "${SLURM_PARTITION:-}" ] && SBATCH_PARTITION_ARGS+=(--partition="$SLURM_PARTITION")
+[ -n "${SLURM_PARTITION:-}" ] && SBATCH_PARTITION_ARGS=(--partition="$SLURM_PARTITION")
 
 ARRAY_SIZE="${ARRAY_SIZE:-20}"
 TSP_OUT="${TSP_OUT:-$ROOT/results/tsp-generation}"
@@ -46,7 +50,8 @@ export_vars="ALL,TSP_ROOT=$ROOT,TSP_OUT=$TSP_OUT,TSP_TASKS=$TSP_TASKS"
 export_vars+=",TSP_MAX_NEW_TOKENS=$TSP_MAX_NEW_TOKENS,TSP_SEED=$TSP_SEED,HF_HOME=$HF_HOME"
 
 ARRAY_JOB=$(sbatch --parsable \
-  "${SBATCH_ACCOUNT_ARGS[@]}" "${SBATCH_PARTITION_ARGS[@]}" \
+  "${SBATCH_ACCOUNT_ARGS[@]+"${SBATCH_ACCOUNT_ARGS[@]}"}" \
+  "${SBATCH_PARTITION_ARGS[@]+"${SBATCH_PARTITION_ARGS[@]}"}" \
   --array="0-$((ARRAY_SIZE - 1))" \
   --chdir="$SLURM_DIR" \
   --export="${export_vars}" \
@@ -54,7 +59,8 @@ ARRAY_JOB=$(sbatch --parsable \
 echo "submitted array job $ARRAY_JOB (0-$((ARRAY_SIZE - 1)), $ARRAY_SIZE array tasks)"
 
 MERGE_JOB=$(sbatch --parsable \
-  "${SBATCH_ACCOUNT_ARGS[@]}" "${SBATCH_PARTITION_ARGS[@]}" \
+  "${SBATCH_ACCOUNT_ARGS[@]+"${SBATCH_ACCOUNT_ARGS[@]}"}" \
+  "${SBATCH_PARTITION_ARGS[@]+"${SBATCH_PARTITION_ARGS[@]}"}" \
   --dependency="afterok:$ARRAY_JOB" \
   --chdir="$SLURM_DIR" \
   --export="$export_vars" \
