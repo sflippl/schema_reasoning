@@ -1,0 +1,2 @@
+model,corpus,valid_result,n_phi_responses,n_terminated,n_judge_all_right,n_reach_solved,share_reach_solved,median_solved_run,median_solved_token,median_solved_share,median_end_run,median_end_token,median_runs_after_solved,median_tokens_after_solved,tokens_per_run_median,answer_pair_recall
+phi4mr,/Users/idamo/Documents/AlgGrammar/rebuttal/unconfounded,True,300,297,105,89,0.8476190476190476,342.0,906.0,0.5006060606060606,805.0,2103.0,372.0,906.0,2.601518026565465,0.9508928571428571

@@ -306,6 +306,41 @@ and output directory. Source/configuration/runtime changes require a new output 
 STOP logs are in `OUT/logs/`; derived data in `OUT/schema/`, `OUT/tsp/`, `OUT/tsp_original3/`,
 `OUT/analysis/` and `OUT/figures/`. Input data is never modified. Repeated stage analysis is cheap.
 
+### Unconfounded-corpus STOP-direction replication (Slurm)
+
+`data/stop_solved_unconfounded/` holds an externally-computed STOP-approach direction and
+`T_solved` metadata for a SEPARATE, gender/role-counterbalanced corpus (D1 of
+`20260915-binding_dyn_d1_v3w2`, already present as `data/vstop/core/D1-tokens.parquet`; gold
+answers are `data/primitives/tasks.parquet` filtered to `corpus == "d1"`). This is independent of
+the main STOP matrix above, injecting the **raw** (uncentred, no within-primitive mean
+subtraction) direction `u_raw_residual` at dose `alpha * sd_raw_along_u` into 84 judge-all-right,
+`T_solved`-reaching items, at the run end 30 runs after `T_solved` (sustained schedule), resuming
+and scoring with the same harness (`inject.resume_generate`/`pilot.tail_stats`) the main
+experiment uses.
+
+No shuffled-label null was supplied with this corpus (only the aggregated direction vectors, not
+the raw per-position activations a permutation null needs), so
+`stop_steering/unconfounded_capture.py` reconstructs one: it forward-passes each of the 89
+`reaches_solved` traces once (teacher-forced, no generation) to capture real layer-16 states at
+the same S/B positions, checks its own reconstructed `stop` contrast against the supplied
+`u_raw_residual` as a parity gate, then builds the shuffled-label contrast from those states.
+
+Deploy on Slurm much like TSP generation -- array-sharded, resumable, a separate merge step:
+
+```bash
+bash scripts/slurm/submit_stop_unconfounded.sh
+```
+
+This submits `stop_unconfounded_capture.sbatch` (builds the shuffled null; skip with
+`SKIP_CAPTURE=1` if you already have one or only want `--arms stop`), then a 20-task array
+(`stop_unconfounded_generate_array.sbatch`, depends on the capture job), then a merge job
+(`stop_unconfounded_generate_merge.sbatch`, depends on the array) that assembles
+`$STOP_OUT/pack/results.parquet`. `STOP_ARMS` (default `"stop shuffled"`), `STOP_DOSES` (default
+`"0.25 0.5 1.0"`) and `STOP_BUDGET` (default `2048` completion tokens) are overridable env vars;
+an optional `solved` specificity-control arm is also available via `STOP_ARMS`, but its dose unit
+reuses `sd_raw_along_u` as a documented assumption (no `sd` was supplied for it), so it is not
+run by default.
+
 ## Source, validation and GitHub
 
 Everything specific to the current experiments is inside this repository:
