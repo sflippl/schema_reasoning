@@ -114,13 +114,15 @@ class Injector:
 
 def resume_generate(lm, ids, prefix_len, *, vector=None, alpha=0.0, layer=DEFAULT_LAYER,
                     schedule="sustained", budget=TOKEN_BUDGET, eos_ids=(), prompt_len=None,
-                    temperature=0.0, top_p=1.0, seed=None):
+                    temperature=0.0, top_p=1.0, seed=None, inserted_ids=()):
     """Greedy continuation from ``ids[:prefix_len]``; injection never touches the prefix.
 
     ``prompt_len`` replays the original decode path: prefill the prompt in one chunk, then
     teacher-force the stored response tokens one at a time, exactly as the corpus was produced.
     Bulk-prefilling the whole prefix instead is faster but numerically different, and greedy
-    argmax turns that difference into divergent tokens within a few dozen steps.
+    argmax turns that difference into divergent tokens within a few dozen steps. ``inserted_ids``
+    are teacher-forced into the resumed context after the stored prefix and before continuation;
+    they do not count against ``budget``.
     """
     require(0 < prefix_len <= len(ids), "prefix out of range")
     boundary = prefix_len if prompt_len is None else int(prompt_len)
@@ -148,6 +150,12 @@ def resume_generate(lm, ids, prefix_len, *, vector=None, alpha=0.0, layer=DEFAUL
             out = lm.model(input_ids=step, past_key_values=cache, use_cache=True,
                            position_ids=position)
             cache, logits = out.past_key_values, out.logits[:, -1, :].float()
+        for offset, token_id in enumerate(inserted_ids):
+            step = torch.tensor([[int(token_id)]], device=lm.device)
+            position = torch.tensor([[prefix_len + offset]], device=lm.device)
+            out = lm.model(input_ids=step, past_key_values=cache, use_cache=True,
+                           position_ids=position)
+            cache, logits = out.past_key_values, out.logits[:, -1, :].float()
         with Injector(lm, layer, vector, alpha, schedule) as injector:
             while len(generated) < budget:
                 token = int(_pick(logits, temperature, top_p, gen))
@@ -156,7 +164,9 @@ def resume_generate(lm, ids, prefix_len, *, vector=None, alpha=0.0, layer=DEFAUL
                     stop_reason = "eos"
                     break
                 step = torch.tensor([[token]], device=lm.device)
-                position = torch.tensor([[prefix_len + len(generated) - 1]], device=lm.device)
+                position = torch.tensor([[
+                    prefix_len + len(inserted_ids) + len(generated) - 1
+                ]], device=lm.device)
                 out = lm.model(input_ids=step, past_key_values=cache, use_cache=True,
                                position_ids=position)
                 cache, logits = out.past_key_values, out.logits[:, -1, :].float()

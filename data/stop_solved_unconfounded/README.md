@@ -26,4 +26,28 @@
     T_solved + 30 runs (sustained schedule, protocol section 4); alpha = 1 is one within-primitive SD. Validation here: held-out AUC of the
     projection on u for S against B, five passage folds, 0.882 (label-permutation null 0.501); solved direction 0.626.
     Cosine with the direction computed on the 2026-08-24 identify export: 0.296 (within-primitive), 0.386 (raw).
+
+## Prompt-text alternatives
+
+`scripts/slurm/submit_stop_unconfounded_prompt.sh` submits the prompt-only counterpart without
+loading or waiting for the STOP vector. It uses the 84 judge-solved, terminated traces with more
+than 30 reasoning runs after `T_solved`, and pairs each item across two insertion locations: the
+run end at `T_solved` (offset 0) and the run end 30 runs later.
+
+At each location, the three conditions are:
+
+* **control:** no inserted text;
+* **think-close:** append the literal `</think>` to the resumed context;
+* **final-answer:** append the literal `Final answer:` to the resumed context.
+
+The stored prompt and reasoning prefix are replayed unchanged up to the selected run end. The
+insertion is then teacher-forced into the model context, and the model continues greedily up to
+the remaining portion of the original 8,192-token completion cap. The remaining generation budget
+is computed per item, offset, and condition as 8,192 minus the already-generated response prefix
+and inserted text tokens; the no-insertion control uses only the response prefix in that
+calculation. This keeps the full prefix, insertion, and generated continuation within the cap.
+Thus the default experiment produces 84 items × 2 locations × 3 conditions = 504 paired
+continuations. The per-row `budget` records the resulting generation limit. The array job writes
+item shards; its dependent merge job produces `pack/results.parquet` and a manifest under
+`results/stop-unconfounded-prompt-injection/` by default.
     
