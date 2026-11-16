@@ -3,7 +3,7 @@ name = "algo-grammar-schema"
 version = "0.1.0"
 description = "Research project: algorithmic grammar/schema (working title)."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 # Conservative lower bounds for reproducibility (exact versions are pinned in uv.lock). numpy carries
 # an upper bound because the fp16 latent-capture path is version-sensitive (audit DEP-08). jupyterlab
 # moved to the `dev` extra — it is a notebook tool, not a package runtime dependency (audit DEP-03).
@@ -97,7 +97,7 @@ packages = ["code/dev"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py310"
 extend-exclude = ["code/reference"]
 
 [tool.ruff.lint]

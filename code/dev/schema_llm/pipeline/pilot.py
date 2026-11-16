@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ..core.llm import extract_json
@@ -355,7 +355,7 @@ def main() -> None:
     if args.out:
         out_dir = Path(args.out)
     else:
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         out_dir = REPO_ROOT / "results" / "schema_llm" / stamp
     enabled_tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
     models = [m.strip() for m in args.models.split(",") if m.strip()] if args.models else None

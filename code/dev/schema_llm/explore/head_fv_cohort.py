@@ -20,7 +20,7 @@ import unicodedata
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -171,7 +171,7 @@ class Calls:
                     "latency_seconds": time.perf_counter() - start,
                     "request_timeout_seconds": timeout, "max_completion_tokens": tokens,
                     "core_max_retries": 0, "attempt": attempt,
-                    "timestamp_utc": datetime.now(UTC).isoformat(),
+                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                 }
                 write_json(path, record)
             if record["status"] == "valid_json":

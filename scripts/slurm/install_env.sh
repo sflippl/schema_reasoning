@@ -22,13 +22,13 @@ cd "$ROOT"
 echo "Using python: $(command -v python)"
 python --version
 
-# pyproject.toml requires >=3.11 (pre-existing code uses datetime.UTC, added in 3.11); fail
+# pyproject.toml requires >=3.10 (pervasive use of zip(..., strict=True), added in 3.10); fail
 # fast with a clear message here instead of a confusing traceback deep in an import chain.
 python -c "
 import sys
-if sys.version_info < (3, 11):
+if sys.version_info < (3, 10):
     sys.exit(
-        f'This repo requires Python >=3.11 (pyproject.toml); the active environment has '
+        f'This repo requires Python >=3.10 (pyproject.toml); the active environment has '
         f'{sys.version.split()[0]}. Activate a different conda env (ideally 3.12, matching '
         f'.python-version) before running this script.'
     )
