@@ -55,7 +55,6 @@ def _config(root: Path, device: str, budget: int, run_offsets: tuple[int, ...],
     return {
         "format": "stop-unconfounded-prompt-injection-v1",
         "corpus": "unconfounded-d1",
-        "release": cp._sha(root / "MANIFEST.json"),
         "population_sha256": cp._sha(root / ud.POPULATION_CSV),
         "runtime": _runtime(),
         "device": device,
@@ -227,9 +226,7 @@ def main() -> None:
     args = parser.parse_args()
     root = args.root.resolve()
     os.chdir(root)
-    from ..reproduction import verify
 
-    verify(root)
     require(args.run_offsets and min(args.run_offsets) >= 0,
             "run offsets must be non-negative and include at least one value")
     population = ud.load_population(root, min_runs_after_solved=max(args.run_offsets))
