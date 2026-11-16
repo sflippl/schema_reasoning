@@ -23,7 +23,9 @@
 #   CONDA_ENV                        (only needed if your cluster's job startup does NOT
 #                                      inherit PATH/CONDA_* from --export=ALL)
 #   ARRAY_SIZE (default 20), STOP_OUT, STOP_ARMS (default "stop shuffled"),
-#   STOP_DOSES (default "0.25 0.5 1.0"), STOP_BUDGET (default 2048), SKIP_CAPTURE
+#   STOP_DOSES (default "0.25 0.5 1.0"), STOP_BUDGET (default 2048),
+#   STOP_RUN_OFFSETS (default "0 30" -- runs after T_solved to inject at; every item is
+#     injected at EVERY requested offset, so conditions are paired per item), SKIP_CAPTURE
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SLURM_DIR="$ROOT/scripts/slurm"
@@ -40,11 +42,13 @@ STOP_OUT="${STOP_OUT:-$ROOT/results/stop-unconfounded-injection}"
 STOP_ARMS="${STOP_ARMS:-stop shuffled}"
 STOP_DOSES="${STOP_DOSES:-0.25 0.5 1.0}"
 STOP_BUDGET="${STOP_BUDGET:-2048}"
+STOP_RUN_OFFSETS="${STOP_RUN_OFFSETS:-0 30}"
 
 mkdir -p "$STOP_OUT" "$SLURM_DIR/logs"
 
 export_vars="ALL,STOP_ROOT=$ROOT,STOP_OUT=$STOP_OUT,STOP_ARMS=$STOP_ARMS"
-export_vars+=",STOP_DOSES=$STOP_DOSES,STOP_BUDGET=$STOP_BUDGET,HF_HOME=$HF_HOME"
+export_vars+=",STOP_DOSES=$STOP_DOSES,STOP_BUDGET=$STOP_BUDGET"
+export_vars+=",STOP_RUN_OFFSETS=$STOP_RUN_OFFSETS,HF_HOME=$HF_HOME"
 
 ARRAY_DEPENDENCY=()
 if [ "${SKIP_CAPTURE:-0}" != "1" ]; then
@@ -86,5 +90,5 @@ Track progress with:
   tail -f $SLURM_DIR/logs/stop-unconf-gen_${ARRAY_JOB}_*.out
   tail -f $SLURM_DIR/logs/stop-unconf-merge_${MERGE_JOB}.out
 
-Final pack (84 items x (1 control + arms x doses)) lands at: $STOP_OUT/pack
+Final pack (84 items x run_offsets x (1 control + arms x doses)) lands at: $STOP_OUT/pack
 EOF

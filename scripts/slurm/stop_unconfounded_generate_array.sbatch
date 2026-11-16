@@ -31,6 +31,7 @@ OUT="${STOP_OUT:?set STOP_OUT to the shared output directory}"
 ARMS="${STOP_ARMS:-stop shuffled}"
 DOSES="${STOP_DOSES:-0.25 0.5 1.0}"
 BUDGET="${STOP_BUDGET:-2048}"
+RUN_OFFSETS="${STOP_RUN_OFFSETS:-0 30}"
 ARRAY_INDEX="${SLURM_ARRAY_TASK_ID:?this script must run as a Slurm array task (sbatch --array=0-N)}"
 ARRAY_SIZE="${SLURM_ARRAY_TASK_COUNT:-${STOP_ARRAY_SIZE:?set STOP_ARRAY_SIZE if your Slurm version does not export SLURM_ARRAY_TASK_COUNT}}"
 
@@ -50,7 +51,7 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
 TOTAL_ITEMS=$(python -m dev.schema_llm.explore.stop_steering.unconfounded_generate \
-  --root "$ROOT" --population-size)
+  --root "$ROOT" --run-offsets $RUN_OFFSETS --population-size)
 CHUNK=$(((TOTAL_ITEMS + ARRAY_SIZE - 1) / ARRAY_SIZE))
 START=$((ARRAY_INDEX * CHUNK))
 if [ "$START" -ge "$TOTAL_ITEMS" ]; then
@@ -62,7 +63,7 @@ if [ "$END" -ge "$TOTAL_ITEMS" ]; then
   END=$((TOTAL_ITEMS - 1))
 fi
 TASK_INDICES="$START-$END"
-echo "Array task $ARRAY_INDEX/$ARRAY_SIZE injecting population positions $TASK_INDICES (of $TOTAL_ITEMS), arms=[$ARMS] doses=[$DOSES]."
+echo "Array task $ARRAY_INDEX/$ARRAY_SIZE injecting population positions $TASK_INDICES (of $TOTAL_ITEMS), arms=[$ARMS] doses=[$DOSES] run_offsets=[$RUN_OFFSETS]."
 
 # shellcheck disable=SC2086
 python -m dev.schema_llm.explore.stop_steering.unconfounded_generate \
@@ -71,5 +72,6 @@ python -m dev.schema_llm.explore.stop_steering.unconfounded_generate \
   --arms $ARMS \
   --doses $DOSES \
   --budget "$BUDGET" \
+  --run-offsets $RUN_OFFSETS \
   --device cuda:0 \
   --task-indices "$TASK_INDICES"

@@ -314,9 +314,14 @@ STOP logs are in `OUT/logs/`; derived data in `OUT/schema/`, `OUT/tsp/`, `OUT/ts
 answers are `data/primitives/tasks.parquet` filtered to `corpus == "d1"`). This is independent of
 the main STOP matrix above, injecting the **raw** (uncentred, no within-primitive mean
 subtraction) direction `u_raw_residual` at dose `alpha * sd_raw_along_u` into 84 judge-all-right,
-`T_solved`-reaching items, at the run end 30 runs after `T_solved` (sustained schedule), resuming
-and scoring with the same harness (`inject.resume_generate`/`pilot.tail_stats`) the main
-experiment uses.
+`T_solved`-reaching items, resuming and scoring with the same harness
+(`inject.resume_generate`/`pilot.tail_stats`) the main experiment uses.
+
+Each item is injected at BOTH **run_offset 0** (immediately at `T_solved`) and **run_offset 30**
+(the run end 30 runs after `T_solved`, sustained schedule -- the supplied protocol's own choice),
+so the two conditions are directly paired per item for comparison rather than needing separate
+runs. The population is filtered for feasibility at the largest requested offset (84 items at the
+default 0/30 pair), guaranteeing every item is usable at every smaller offset too.
 
 No shuffled-label null was supplied with this corpus (only the aggregated direction vectors, not
 the raw per-position activations a permutation null needs), so
@@ -336,10 +341,10 @@ This submits `stop_unconfounded_capture.sbatch` (builds the shuffled null; skip 
 (`stop_unconfounded_generate_array.sbatch`, depends on the capture job), then a merge job
 (`stop_unconfounded_generate_merge.sbatch`, depends on the array) that assembles
 `$STOP_OUT/pack/results.parquet`. `STOP_ARMS` (default `"stop shuffled"`), `STOP_DOSES` (default
-`"0.25 0.5 1.0"`) and `STOP_BUDGET` (default `2048` completion tokens) are overridable env vars;
-an optional `solved` specificity-control arm is also available via `STOP_ARMS`, but its dose unit
-reuses `sd_raw_along_u` as a documented assumption (no `sd` was supplied for it), so it is not
-run by default.
+`"0.25 0.5 1.0"`), `STOP_BUDGET` (default `2048` completion tokens) and `STOP_RUN_OFFSETS`
+(default `"0 30"`) are overridable env vars; an optional `solved` specificity-control arm is also
+available via `STOP_ARMS`, but its dose unit reuses `sd_raw_along_u` as a documented assumption
+(no `sd` was supplied for it), so it is not run by default.
 
 ## Source, validation and GitHub
 

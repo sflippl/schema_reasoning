@@ -17,6 +17,7 @@ OUT="${STOP_OUT:?set STOP_OUT to the shared output directory}"
 ARMS="${STOP_ARMS:-stop shuffled}"
 DOSES="${STOP_DOSES:-0.25 0.5 1.0}"
 BUDGET="${STOP_BUDGET:-2048}"
+RUN_OFFSETS="${STOP_RUN_OFFSETS:-0 30}"
 
 cd "$ROOT"
 
@@ -40,6 +41,7 @@ python -m dev.schema_llm.explore.stop_steering.unconfounded_generate \
   --arms $ARMS \
   --doses $DOSES \
   --budget "$BUDGET" \
+  --run-offsets $RUN_OFFSETS \
   --device cuda:0
 
 echo "Pack ready: $OUT/pack"

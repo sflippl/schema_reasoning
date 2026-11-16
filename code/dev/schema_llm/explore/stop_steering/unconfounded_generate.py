@@ -71,6 +71,9 @@ def arm_vector_and_dose_unit(root: Path, arm: str, supplied: dict) -> tuple[np.n
     raise ValueError(f"unknown arm: {arm}")
 
 
+RUN_OFFSETS = (0, 30)  # T_solved itself, and 30 runs after it (the supplied protocol's default)
+
+
 def run(
     root: Path,
     out: Path,
@@ -80,6 +83,7 @@ def run(
     budget: int = BUDGET,
     layer: int = LAYER,
     schedule: str = SCHEDULE,
+    run_offsets: tuple[int, ...] = RUN_OFFSETS,
     smoke: bool = False,
     task_indices: list[int] | None = None,
 ) -> Path | None:
@@ -89,12 +93,18 @@ def run(
     injects into; it is not part of ``config``, so partial runs over different subsets of the
     SAME population/settings keep validating against each other. The pack is only built when
     ``task_indices`` is ``None`` (the default, and the final merge invocation).
+
+    ``run_offsets`` injects at EVERY requested run-offset after T_solved for the SAME items
+    (default both 0 -- immediately at T_solved -- and 30, the supplied protocol's own choice),
+    so the two conditions are directly paired per item rather than needing separate runs/output
+    directories. The population is filtered for feasibility at ``max(run_offsets)`` (the most
+    restrictive offset), so every item in it is guaranteed usable at every smaller offset too.
     """
     from ...core.model import load_model
     from ..head_fv_models import active as active_model
     from ..reproduction import _runtime
 
-    population = ud.load_population(root)
+    population = ud.load_population(root, min_runs_after_solved=max(run_offsets))
     if smoke:
         population = population.iloc[:2]
     if task_indices is None:
@@ -122,7 +132,7 @@ def run(
         "budget": budget,
         "arms": list(arms),
         "doses": list(doses),
-        "run_offset": ud.RUN_OFFSET,
+        "run_offsets": list(run_offsets),
         "smoke": smoke,
         "vector_variant": "raw (no within-primitive mean subtraction)",
     }
@@ -151,34 +161,36 @@ def run(
             if lm is None:
                 lm = load_model(spec.model, revision=spec.revision, device_map=device)
             trace = ud.build_trace(tokens, item)
-            prefix_len = ud.injection_prefix_len(trace, int(target["solved_run_index"]))
             ids = inject.load_ids(tokens, item)
-            prefix_text = lm.tokenizer.decode(ids[:prefix_len], skip_special_tokens=False)
             item_rows = []
-            for arm, dose in plan:
-                vector = None if arm == "control" else arm_specs[arm][0]
-                dose_unit = 0.0 if arm == "control" else arm_specs[arm][1]
-                alpha = dose * dose_unit
-                result = inject.resume_generate(
-                    lm, ids, prefix_len, vector=vector, alpha=alpha, layer=layer,
-                    schedule=schedule, budget=budget, eos_ids=eos,
-                    prompt_len=int(prompt_lens[item]))
-                stats = pilot.tail_stats(lm.tokenizer, result["generated"], prefix_text,
-                                         gold[item])
-                item_rows.append(dict(
-                    item_id=item, arm=arm, dose=dose, alpha=alpha, layer=layer,
-                    schedule=schedule, budget=budget, prefix_len=prefix_len,
-                    solved_run_index=int(target["solved_run_index"]),
-                    runs_after_solved=float(target["runs_after_solved"]),
-                    stop_reason=result["stop_reason"], n_generated=len(result["generated"]),
-                    generated_ids=list(result["generated"]),
-                    terminated=result["stop_reason"] == "eos",
-                    applied=result["applied"], mean_arrived_norm=result["mean_arrived_norm"],
-                    **stats,
-                ))
-                print(f"{item} {arm:9s} dose {dose:>4} -> {result['stop_reason']:6s} "
-                      f"{len(result['generated']):4d} tok think_closed={stats['closed_think']}",
-                      flush=True)
+            for run_offset in run_offsets:
+                prefix_len = ud.injection_prefix_len(
+                    trace, int(target["solved_run_index"]), run_offset=run_offset)
+                prefix_text = lm.tokenizer.decode(ids[:prefix_len], skip_special_tokens=False)
+                for arm, dose in plan:
+                    vector = None if arm == "control" else arm_specs[arm][0]
+                    dose_unit = 0.0 if arm == "control" else arm_specs[arm][1]
+                    alpha = dose * dose_unit
+                    result = inject.resume_generate(
+                        lm, ids, prefix_len, vector=vector, alpha=alpha, layer=layer,
+                        schedule=schedule, budget=budget, eos_ids=eos,
+                        prompt_len=int(prompt_lens[item]))
+                    stats = pilot.tail_stats(lm.tokenizer, result["generated"], prefix_text,
+                                             gold[item])
+                    item_rows.append(dict(
+                        item_id=item, run_offset=run_offset, arm=arm, dose=dose, alpha=alpha,
+                        layer=layer, schedule=schedule, budget=budget, prefix_len=prefix_len,
+                        solved_run_index=int(target["solved_run_index"]),
+                        runs_after_solved=float(target["runs_after_solved"]),
+                        stop_reason=result["stop_reason"], n_generated=len(result["generated"]),
+                        generated_ids=list(result["generated"]),
+                        terminated=result["stop_reason"] == "eos",
+                        applied=result["applied"], mean_arrived_norm=result["mean_arrived_norm"],
+                        **stats,
+                    ))
+                    print(f"{item} +{run_offset:>3}runs {arm:9s} dose {dose:>4} -> "
+                          f"{result['stop_reason']:6s} {len(result['generated']):4d} tok "
+                          f"think_closed={stats['closed_think']}", flush=True)
             cp._write_json(path, item_rows)
         rows.extend(item_rows)
     if lm is not None:
@@ -231,6 +243,12 @@ def main() -> None:
     p.add_argument("--budget", type=int, default=BUDGET)
     p.add_argument("--layer", type=int, default=LAYER)
     p.add_argument("--schedule", default=SCHEDULE, choices=("sustained", "once"))
+    p.add_argument(
+        "--run-offsets", nargs="+", type=int, default=list(RUN_OFFSETS),
+        help="runs after T_solved to inject at (0 = immediately at T_solved); every item gets "
+        "injected at EVERY requested offset, so conditions are paired per item. The population "
+        "is filtered for feasibility at the largest requested offset.",
+    )
     p.add_argument("--check-only", action="store_true")
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--population-size", action="store_true",
@@ -246,7 +264,7 @@ def main() -> None:
     from ..reproduction import verify
 
     verify(root)
-    population = ud.load_population(root)
+    population = ud.load_population(root, min_runs_after_solved=max(args.run_offsets))
     if args.population_size:
         print(len(population))
         return
@@ -264,6 +282,7 @@ def main() -> None:
             require((root / SHUFFLED_NPZ).exists(),
                     f"missing {SHUFFLED_NPZ}; run unconfounded_capture.py first")
         print(f"Unconfounded injection inputs verified: {len(population)} items, "
+              f"{len(args.run_offsets)} run-offsets x "
               f"{len(args.arms) * len(args.doses) + 1} arm/dose combos each "
               "(incl. control); no weights/GPU used.")
         return
@@ -275,9 +294,11 @@ def main() -> None:
         )
     out = (args.out or root / "results/stop-unconfounded-injection").resolve()
     pack = run(
-        root, out, args.device, tuple(args.arms), tuple(args.doses),
-        min(args.budget, 64) if args.smoke else args.budget,
-        args.layer, args.schedule, args.smoke, task_indices,
+        root, out, args.device,
+        arms=tuple(args.arms), doses=tuple(args.doses),
+        budget=min(args.budget, 64) if args.smoke else args.budget,
+        layer=args.layer, schedule=args.schedule,
+        run_offsets=tuple(args.run_offsets), smoke=args.smoke, task_indices=task_indices,
     )
     if pack is None:
         print(f"Item indices {task_indices} done; rerun with no --task-indices once every "
