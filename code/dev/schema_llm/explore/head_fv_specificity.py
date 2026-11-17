@@ -28,7 +28,7 @@ from ..primitives.funcvec_heads import build_head_fv, oproj_slices
 from ..rlvr.environment.parsing import parse_response
 from ..rlvr.environment.verifier import verify_spot_error
 from .head_fv_models import active as active_model
-from .head_fv_phi_cache import cache_policy, stable_phi_cache
+from .head_fv_phi_cache import cache_policy, stable_phi_cache, stable_phi_rotary
 from .primitive_transplant.analyze import _repeat_frac
 
 # Subject-specific constants live in head_fv_models; these names are kept so every existing
@@ -87,6 +87,16 @@ def subject_cache(lm):
     """
     if SPEC.supports_phi3_cache_fix:
         with stable_phi_cache(lm):
+            yield
+    else:
+        yield
+
+
+@contextlib.contextmanager
+def resume_cache(lm):
+    """Cache context for manual cached forwards, which bypass HF generation preparation."""
+    if SPEC.supports_phi3_cache_fix:
+        with stable_phi_rotary(lm):
             yield
     else:
         yield

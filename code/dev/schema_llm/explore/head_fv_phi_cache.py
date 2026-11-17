@@ -39,7 +39,7 @@ def _prepare_without_reset(
     )
 
 
-def _checked(lm):
+def _checked_rotary(lm):
     model = lm.model
     spec = active_model()
     if not spec.supports_phi3_cache_fix:
@@ -51,16 +51,6 @@ def _checked(lm):
         )
     if not isinstance(model, Phi3ForCausalLM):
         raise ValueError("cache compatibility is limited to the inspected Phi3 implementation")
-    for fn, expected in (
-        (Phi3ForCausalLM.prepare_inputs_for_generation, NATIVE_SHA),
-        (GenerationMixin.prepare_inputs_for_generation, GENERIC_SHA),
-    ):
-        if hashlib.sha256(inspect.getsource(fn).encode()).hexdigest() != expected:
-            raise ValueError("generation preparation source changed; recertification required")
-    if model.prepare_inputs_for_generation.__func__ not in (
-        Phi3ForCausalLM.prepare_inputs_for_generation, _prepare_without_reset
-    ):
-        raise ValueError("unrecognized existing generation preparation override")
     params = model.config.rope_parameters
     if (
         params.get("rope_type") != "longrope" or not params.get("short_factor")
@@ -75,6 +65,21 @@ def _checked(lm):
         or original.numel() != len(params["short_factor"]) or not torch.isfinite(original).all()
     ):
         raise ValueError("unexpected initialized rotary basis")
+    return model, rotary
+
+
+def _checked(lm):
+    model, rotary = _checked_rotary(lm)
+    for fn, expected in (
+        (Phi3ForCausalLM.prepare_inputs_for_generation, NATIVE_SHA),
+        (GenerationMixin.prepare_inputs_for_generation, GENERIC_SHA),
+    ):
+        if hashlib.sha256(inspect.getsource(fn).encode()).hexdigest() != expected:
+            raise ValueError("generation preparation source changed; recertification required")
+    if model.prepare_inputs_for_generation.__func__ not in (
+        Phi3ForCausalLM.prepare_inputs_for_generation, _prepare_without_reset
+    ):
+        raise ValueError("unrecognized existing generation preparation override")
     return model, rotary
 
 
@@ -93,6 +98,29 @@ def cache_policy(lm) -> dict:
         "attention_scaling": float(rotary.attention_scaling),
         "model_config_changed": False,
     }
+
+
+@contextmanager
+def stable_phi_rotary(lm):
+    """Keep the original rotary basis stable during explicit cached model forwards.
+
+    The manual resume path supplies ``position_ids`` and ``past_key_values`` directly to the
+    model; it does not call ``prepare_inputs_for_generation``. Therefore it needs the verified
+    equal-factor rotary invariant, but not a source-level certificate for HF's generation helper.
+    """
+    _, rotary = _checked_rotary(lm)
+    old_inv = rotary.inv_freq
+    old_long = getattr(rotary, "long_inv_freq", _MISSING)
+    rotary.inv_freq = rotary.original_inv_freq
+    rotary.long_inv_freq = rotary.original_inv_freq
+    try:
+        yield
+    finally:
+        rotary.inv_freq = old_inv
+        if old_long is _MISSING:
+            delattr(rotary, "long_inv_freq")
+        else:
+            rotary.long_inv_freq = old_long
 
 
 @contextmanager

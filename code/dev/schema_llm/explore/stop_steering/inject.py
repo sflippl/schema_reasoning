@@ -139,7 +139,7 @@ def resume_generate(lm, ids, prefix_len, *, vector=None, alpha=0.0, layer=DEFAUL
     if temperature > 0:
         gen = torch.Generator(device=lm.device)
         gen.manual_seed(int(seed if seed is not None else 0))
-    with torch.inference_mode(), runtime.subject_cache(lm):
+    with torch.inference_mode(), runtime.resume_cache(lm):
         out = lm.model(input_ids=head, attention_mask=torch.ones_like(head),
                        position_ids=torch.arange(boundary, device=lm.device)[None],
                        use_cache=True)
