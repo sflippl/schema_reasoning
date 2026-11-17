@@ -14,9 +14,9 @@ set -euo pipefail
 
 ROOT="${STOP_ROOT:?set STOP_ROOT to the repo checkout path}"
 OUT="${STOP_OUT:?set STOP_OUT to the shared output directory}"
-ARMS="${STOP_ARMS:-stop shuffled}"
-DOSES="${STOP_DOSES:-0.25 0.5 1.0}"
-BUDGET="${STOP_BUDGET:-2048}"
+ARMS="${STOP_ARMS:-stop}"
+DOSES="${STOP_DOSES:-0.25 0.5}"
+BUDGET="${STOP_BUDGET:--1}"
 RUN_OFFSETS="${STOP_RUN_OFFSETS:-0 30}"
 
 cd "$ROOT"

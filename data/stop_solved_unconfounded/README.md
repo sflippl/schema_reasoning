@@ -27,6 +27,27 @@
     projection on u for S against B, five passage folds, 0.882 (label-permutation null 0.501); solved direction 0.626.
     Cosine with the direction computed on the 2026-08-24 identify export: 0.296 (within-primitive), 0.386 (raw).
 
+## Current core-vector injection
+
+The current Slurm runner uses `data/stop_vectors/phi4mr/stop_vector_phi4mr.npz`, specifically
+`u_stop` and its matching `dose_sd` (5.889 residual units), not the older
+`u_raw_residual` vector described above. The supplied `u_stop` has unit norm and is exactly aligned
+with the saved `contrast`; its provenance identifies the D1 metacluster-L16 token export. This is
+the primitive-centered/core vector, with primitive means removed. The runner checks the vector's
+model and layer before generation.
+
+The default experiment is Phi-4-mini-reasoning only, at layer 16, with a sustained injection at
+the two paired run offsets: 0 (at `T_solved`) and 30 runs after `T_solved`. Each location includes
+an unmodified resumed control and core-vector conditions at `alpha=0.25` and `alpha=0.5`; the
+actual injected residual scale is `alpha * dose_sd`. It uses the 84 eligible judge-solved traces
+and, by default, generates up to the remaining capacity of the original 8,192-token completion
+cap. This is 84 × 2 × 3 = 504 continuations.
+
+The array and merge jobs produce `pack/results.parquet` with the full unmodified model response in
+`response_text` and `pack/tasks.parquet` with the matching prompt and D1 task record/gold. No
+TRAPI or accuracy-judge stage is required. The default destination is
+`results/stop-unconfounded-injection-v2/`.
+
 ## Prompt-text alternatives
 
 `scripts/slurm/submit_stop_unconfounded_prompt.sh` submits the prompt-only counterpart without
@@ -49,5 +70,15 @@ calculation. This keeps the full prefix, insertion, and generated continuation w
 Thus the default experiment produces 84 items × 2 locations × 3 conditions = 504 paired
 continuations. The per-row `budget` records the resulting generation limit. The array job writes
 item shards; its dependent merge job produces `pack/results.parquet` and a manifest under
-`results/stop-unconfounded-prompt-injection/` by default.
+`results/stop-unconfounded-prompt-injection-v2/` by default, keeping the raw-response pack separate
+from any prior output. `pack/results.parquet` contains each
+unmodified response string in `response_text`, including the stored reasoning prefix, literal
+insertion, and newly generated continuation. `pack/tasks.parquet` contains one row per item with
+the exact tokenized task prompt and the original D1 task record, including the gold role key and
+task-design metadata. These files are provided for external/manual evaluation; no accuracy judge
+is run by the Slurm workflow. The legacy `pairs_complete` diagnostic is omitted because it expects
+a different gold schema and would be misleading for D1.
+
+The **control** condition is the paired no-insertion baseline at each location; there is no
+additional, separately generated baseline arm.
     

@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
-# Submits the 3-stage unconfounded STOP-injection experiment:
-#   1. stop_unconfounded_capture.sbatch   -- builds the shuffled-label null (skip with
-#                                             SKIP_CAPTURE=1 if you already have it, or if
-#                                             STOP_ARMS excludes "shuffled")
-#   2. stop_unconfounded_generate_array.sbatch -- injects into the 84-item population,
-#                                             sharded across ARRAY_SIZE array tasks
-#                                             (--dependency=afterok:<capture job>)
-#   3. stop_unconfounded_generate_merge.sbatch -- assembles the final pack
-#                                             (--dependency=afterok:<array job>)
+# Submit the core, primitive-centered STOP-vector experiment:
+#   1. stop_unconfounded_generate_array.sbatch -- paired control and vector doses at offsets 0/30
+#   2. stop_unconfounded_generate_merge.sbatch -- assembles the final pack
 #
 # Prerequisites: run from your already-activated Python environment (e.g. `conda activate
 # <env>`) that already has this repo's deps -- same expectation as
@@ -22,10 +16,10 @@
 #                                      unset, so your cluster's defaults apply)
 #   CONDA_ENV                        (only needed if your cluster's job startup does NOT
 #                                      inherit PATH/CONDA_* from --export=ALL)
-#   ARRAY_SIZE (default 20), STOP_OUT, STOP_ARMS (default "stop shuffled"),
-#   STOP_DOSES (default "0.25 0.5 1.0"), STOP_BUDGET (default 2048),
+#   ARRAY_SIZE (default 20), STOP_OUT, STOP_ARMS (default "stop"),
+#   STOP_DOSES (default "0.25 0.5"), STOP_BUDGET (default -1 = remaining capacity to 8192),
 #   STOP_RUN_OFFSETS (default "0 30" -- runs after T_solved to inject at; every item is
-#     injected at EVERY requested offset, so conditions are paired per item), SKIP_CAPTURE
+#     injected at EVERY requested offset, so conditions are paired per item)
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SLURM_DIR="$ROOT/scripts/slurm"
@@ -38,10 +32,10 @@ SBATCH_PARTITION_ARGS=()
 [ -n "${SLURM_PARTITION:-}" ] && SBATCH_PARTITION_ARGS=(--partition="$SLURM_PARTITION")
 
 ARRAY_SIZE="${ARRAY_SIZE:-20}"
-STOP_OUT="${STOP_OUT:-$ROOT/results/stop-unconfounded-injection}"
-STOP_ARMS="${STOP_ARMS:-stop shuffled}"
-STOP_DOSES="${STOP_DOSES:-0.25 0.5 1.0}"
-STOP_BUDGET="${STOP_BUDGET:-2048}"
+STOP_OUT="${STOP_OUT:-$ROOT/results/stop-unconfounded-injection-v2}"
+STOP_ARMS="${STOP_ARMS:-stop}"
+STOP_DOSES="${STOP_DOSES:-0.25 0.5}"
+STOP_BUDGET="${STOP_BUDGET:--1}"
 STOP_RUN_OFFSETS="${STOP_RUN_OFFSETS:-0 30}"
 
 mkdir -p "$STOP_OUT" "$SLURM_DIR/logs"
@@ -50,24 +44,9 @@ export_vars="ALL,STOP_ROOT=$ROOT,STOP_OUT=$STOP_OUT,STOP_ARMS=$STOP_ARMS"
 export_vars+=",STOP_DOSES=$STOP_DOSES,STOP_BUDGET=$STOP_BUDGET"
 export_vars+=",STOP_RUN_OFFSETS=$STOP_RUN_OFFSETS,HF_HOME=$HF_HOME"
 
-ARRAY_DEPENDENCY=()
-if [ "${SKIP_CAPTURE:-0}" != "1" ]; then
-  CAPTURE_JOB=$(sbatch --parsable \
-    "${SBATCH_ACCOUNT_ARGS[@]+"${SBATCH_ACCOUNT_ARGS[@]}"}" \
-    "${SBATCH_PARTITION_ARGS[@]+"${SBATCH_PARTITION_ARGS[@]}"}" \
-    --chdir="$SLURM_DIR" \
-    --export="ALL,STOP_ROOT=$ROOT,HF_HOME=$HF_HOME" \
-    "$SLURM_DIR/stop_unconfounded_capture.sbatch")
-  echo "submitted capture job $CAPTURE_JOB (builds the shuffled null)"
-  ARRAY_DEPENDENCY=(--dependency="afterok:$CAPTURE_JOB")
-else
-  echo "SKIP_CAPTURE=1: not submitting the capture job (shuffled null must already exist if STOP_ARMS includes 'shuffled')"
-fi
-
 ARRAY_JOB=$(sbatch --parsable \
   "${SBATCH_ACCOUNT_ARGS[@]+"${SBATCH_ACCOUNT_ARGS[@]}"}" \
   "${SBATCH_PARTITION_ARGS[@]+"${SBATCH_PARTITION_ARGS[@]}"}" \
-  "${ARRAY_DEPENDENCY[@]+"${ARRAY_DEPENDENCY[@]}"}" \
   --array="0-$((ARRAY_SIZE - 1))" \
   --chdir="$SLURM_DIR" \
   --export="${export_vars}" \

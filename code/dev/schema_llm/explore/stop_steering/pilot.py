@@ -79,15 +79,24 @@ def switch_profile(tail_tokens, roles):
     marks. This is the positive control the switch arm needs: a direction that fails to cause STOP
     is only informative if it demonstrably does its own job.
     """
-    named = [(q["value"], q["role_id"]) for q in roles
-             if q["value"][:1].isupper() and " " not in q["value"]]
+    named = []
+    for q in roles:
+        value = q["value"]
+        if not (value[:1].isupper() and " " not in value):
+            continue
+        role_ids = q.get("role_ids")
+        if role_ids is None:
+            role_id = q.get("role_id")
+            role_ids = [] if role_id is None else [role_id]
+        if role_ids:
+            named.append((value, frozenset(role_ids)))
     hits = []
-    for value, role in named:
+    for value, role_ids in named:
         for end in events.find_spans(tail_tokens, value):
-            hits.append((end, role))
+            hits.append((end, role_ids))
     hits.sort()
     switches = [pos for i, (pos, role) in enumerate(hits)
-                if i > 0 and role != hits[i - 1][1]]
+                if i > 0 and role.isdisjoint(hits[i - 1][1])]
     per_100 = 100.0 * len(switches) / max(len(tail_tokens), 1)
     return dict(n_switches=len(switches), switches_per_100_tokens=float(per_100),
                 first_switch_token=int(switches[0]) if switches else -1,

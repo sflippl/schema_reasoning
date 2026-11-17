@@ -10,7 +10,7 @@ SLURM_DIR="$ROOT/scripts/slurm"
 
 HF_HOME="${HF_HOME:-$ROOT/.cache/huggingface}"
 ARRAY_SIZE="${STOP_PROMPT_ARRAY_SIZE:-20}"
-STOP_PROMPT_OUT="${STOP_PROMPT_OUT:-$ROOT/results/stop-unconfounded-prompt-injection}"
+STOP_PROMPT_OUT="${STOP_PROMPT_OUT:-$ROOT/results/stop-unconfounded-prompt-injection-v2}"
 STOP_PROMPT_BUDGET="${STOP_PROMPT_BUDGET:--1}"
 STOP_PROMPT_RUN_OFFSETS="${STOP_PROMPT_RUN_OFFSETS:-0 30}"
 [[ "$ARRAY_SIZE" =~ ^[1-9][0-9]*$ ]] || {
@@ -54,5 +54,5 @@ Track progress with:
   tail -f $SLURM_DIR/logs/stop-prompt_${ARRAY_JOB}_*.out
   tail -f $SLURM_DIR/logs/stop-prompt-merge_${MERGE_JOB}.out
 
-Final pack: $STOP_PROMPT_OUT/pack
+Generated responses and task records: $STOP_PROMPT_OUT/pack
 EOF

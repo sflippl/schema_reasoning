@@ -1,19 +1,16 @@
-"""Inject the raw (uncentred) unconfounded STOP-approach direction, plus its shuffled null.
+"""Inject the primitive-centered core STOP direction (and optionally its supplied shuffled null).
 
 Parallel to ``tsp_generate.py`` in shape (resumable ``--task-indices`` shards over an item
 population, a separate merge step building the final pack), but injecting into the unconfounded
 corpus's own 84-item population (``unconfounded_data.load_population``) instead of generating new
-TSP responses. Reuses the existing resume/injection harness (``inject.resume_generate``) and
-scoring (``pilot.tail_stats``) unchanged -- only the vector, dose unit, population and injection
-position are specific to this corpus.
+TSP responses. Reuses the existing resume/injection harness (``inject.resume_generate``) and continuation
+diagnostics (``pilot.tail_stats``) -- only the vector, dose unit, population and injection position
+are specific to this corpus.
 
-Vector: ``u_raw_residual`` (the uncentred variant -- no within-primitive mean subtraction), dose
-``alpha * sd_raw_along_u``, matching the supplied metadata's own convention for that variant.
-The ``shuffled`` arm uses ``unconfounded_capture.build``'s reconstructed null (run that first;
-see its module docstring for why a real shuffled-label null needs a capture pass at all). An
-optional ``solved`` specificity-control arm is also available via ``--arms`` but is NOT run by
-default, since its dose unit (no ``sd`` was supplied for it) is a documented assumption rather
-than something the data specifies.
+Vector: ``u_stop`` from ``data/stop_vectors/phi4mr/stop_vector_phi4mr.npz``. This is the core
+direction with primitive/metacluster means subtracted; its dose unit is the paired ``dose_sd``.
+At each generated token, inject ``alpha * dose_sd * u_stop``. A no-injection resumed control is
+included for every location.
 """
 
 from __future__ import annotations
@@ -34,12 +31,12 @@ from ..tsp_generate import parse_task_indices
 from . import inject, pilot
 from . import unconfounded_data as ud
 
-ARMS = ("stop", "shuffled")  # "solved" is available but not run by default; see module docstring
-DOSES = (0.25, 0.5, 1.0)
+ARMS = ("stop",)
+DOSES = (0.25, 0.5)
 LAYER = 16
 SCHEDULE = "sustained"
-BUDGET = 2048
-SHUFFLED_NPZ = Path("data/stop_solved_unconfounded/derived/shuffled_direction_phi4mr_unconfounded.npz")
+CORPUS_CAP = 8192
+BUDGET = -1
 
 
 def require(condition, message):
@@ -53,22 +50,31 @@ def shard_path(out: Path, item: str) -> Path:
 
 
 def arm_vector_and_dose_unit(root: Path, arm: str, supplied: dict) -> tuple[np.ndarray, float]:
-    """``(unit vector, dose unit)`` for one arm -- everything downstream multiplies by dose."""
+    """Return a unit vector and its supplied residual-scale dose unit."""
     if arm == "stop":
-        return supplied["u_raw_residual"], float(supplied["sd_raw_along_u"])
+        vector = supplied["u_stop"]
+        dose_unit = float(supplied["dose_sd"])
+        require(np.isclose(np.linalg.norm(vector), 1.0, atol=1e-5),
+                "core STOP vector u_stop is not unit norm")
+        require(supplied["model"].item() == "phi4mr", "STOP vector model is not phi4mr")
+        require(supplied["layer"].item() == f"L{LAYER}",
+                f"STOP vector layer must be L{LAYER}")
+        return vector, dose_unit
     if arm == "shuffled":
-        path = root / SHUFFLED_NPZ
-        require(path.exists(),
-                f"missing {path}; run unconfounded_capture.py first to build the shuffled null")
-        with np.load(path) as data:
-            return data["u_shuffled_residual"], float(data["sd_shuffled_along_u"])
-    if arm == "solved":
-        # No sd was supplied for u_solved_residual (it isn't a within-primitive/raw pair like
-        # the stop direction is). Reusing sd_raw_along_u puts it on the same dose SCALE as the
-        # stop arm it's meant to contrast with, but this is a judgement call, not a supplied
-        # value -- flagged here and in the module docstring, not snuck in silently.
-        return supplied["u_solved_residual"], float(supplied["sd_raw_along_u"])
+        vector = supplied["u_stop_shuffled"]
+        dose_unit = float(supplied["dose_sd_shuffled"])
+        require(np.isclose(np.linalg.norm(vector), 1.0, atol=1e-5),
+                "shuffled STOP vector is not unit norm")
+        return vector, dose_unit
     raise ValueError(f"unknown arm: {arm}")
+
+
+def completion_budget(response_prefix_tokens: int, budget: int = BUDGET) -> int:
+    if budget > 0:
+        return budget
+    require(response_prefix_tokens < CORPUS_CAP,
+            f"response prefix already reaches the {CORPUS_CAP}-token cap")
+    return CORPUS_CAP - response_prefix_tokens
 
 
 RUN_OFFSETS = (0, 30)  # T_solved itself, and 30 runs after it (the supplied protocol's default)
@@ -105,6 +111,7 @@ def run(
     from ..reproduction import _runtime
 
     population = ud.load_population(root, min_runs_after_solved=max(run_offsets))
+    require(layer == LAYER, f"the supplied core STOP vector is for layer {LAYER}, not {layer}")
     if smoke:
         population = population.iloc[:2]
     if task_indices is None:
@@ -123,18 +130,22 @@ def run(
         "release": cp._sha(root / "MANIFEST.json"),
         "population_sha256": cp._sha(root / ud.POPULATION_CSV),
         "vectors_sha256": cp._sha(root / ud.VECTORS_PATH),
-        "shuffled_sha256": cp._sha(root / SHUFFLED_NPZ) if "shuffled" in arms else None,
         "runtime": _runtime(),
         "device": device,
         "dtype": "bfloat16",
         "layer": layer,
         "schedule": schedule,
         "budget": budget,
+        "completion_cap": CORPUS_CAP if budget <= 0 else None,
         "arms": list(arms),
         "doses": list(doses),
         "run_offsets": list(run_offsets),
         "smoke": smoke,
-        "vector_variant": "raw (no within-primitive mean subtraction)",
+        "vector_file": str(ud.VECTORS_PATH),
+        "vector_key": "u_stop",
+        "vector_variant": "core (primitive/metacluster-centered)",
+        "dose_unit_key": "dose_sd",
+        "dose_unit": arm_specs["stop"][1] if "stop" in arm_specs else None,
     }
     state = out / "generation.json"
     if state.exists():
@@ -146,6 +157,7 @@ def run(
 
     tokens = ud.load_tokens(root)
     gold = ud.load_gold(root)
+    task_records = ud.load_task_records(root)
     prompt_lens = inject.prompt_lengths(tokens)
     spec = active_model()
     eos = set(spec.eos_ids)
@@ -162,33 +174,54 @@ def run(
                 lm = load_model(spec.model, revision=spec.revision, device_map=device)
             trace = ud.build_trace(tokens, item)
             ids = inject.load_ids(tokens, item)
+            task = task_records[item]
+            task_prompt = lm.tokenizer.decode(
+                ids[:int(prompt_lens[item])], skip_special_tokens=False
+            )
             item_rows = []
             for run_offset in run_offsets:
                 prefix_len = ud.injection_prefix_len(
                     trace, int(target["solved_run_index"]), run_offset=run_offset)
                 prefix_text = lm.tokenizer.decode(ids[:prefix_len], skip_special_tokens=False)
+                completion_prefix_tokens = prefix_len - int(prompt_lens[item])
+                budget_tokens = completion_budget(completion_prefix_tokens, budget)
                 for arm, dose in plan:
                     vector = None if arm == "control" else arm_specs[arm][0]
                     dose_unit = 0.0 if arm == "control" else arm_specs[arm][1]
-                    alpha = dose * dose_unit
+                    injection_scale = dose * dose_unit
                     result = inject.resume_generate(
-                        lm, ids, prefix_len, vector=vector, alpha=alpha, layer=layer,
-                        schedule=schedule, budget=budget, eos_ids=eos,
+                        lm, ids, prefix_len, vector=vector, alpha=injection_scale, layer=layer,
+                        schedule=schedule, budget=budget_tokens, eos_ids=eos,
                         prompt_len=int(prompt_lens[item]))
                     stats = pilot.tail_stats(lm.tokenizer, result["generated"], prefix_text,
                                              gold[item])
+                    # The legacy pair-completeness metric expects `canonical`, absent from D1 gold.
+                    stats.pop("pairs_complete", None)
+                    response_ids = (
+                        ids[int(prompt_lens[item]):prefix_len].tolist()
+                        + list(result["generated"])
+                    )
+                    response_text = lm.tokenizer.decode(
+                        response_ids, skip_special_tokens=False
+                    )
                     item_rows.append(dict(
-                        item_id=item, run_offset=run_offset, arm=arm, dose=dose, alpha=alpha,
-                        layer=layer, schedule=schedule, budget=budget, prefix_len=prefix_len,
+                        item_id=item, task_record=task, task_prompt=task_prompt,
+                        run_offset=run_offset, arm=arm, dose=dose, alpha=dose,
+                        dose_unit=dose_unit, injection_scale=injection_scale,
+                        layer=layer, schedule=schedule, budget=budget_tokens,
+                        budget_setting=budget, prefix_len=prefix_len,
+                        completion_prefix_tokens=completion_prefix_tokens,
+                        corpus_cap=CORPUS_CAP if budget <= 0 else None,
                         solved_run_index=int(target["solved_run_index"]),
                         runs_after_solved=float(target["runs_after_solved"]),
                         stop_reason=result["stop_reason"], n_generated=len(result["generated"]),
                         generated_ids=list(result["generated"]),
+                        response_text=response_text,
                         terminated=result["stop_reason"] == "eos",
                         applied=result["applied"], mean_arrived_norm=result["mean_arrived_norm"],
                         **stats,
                     ))
-                    print(f"{item} +{run_offset:>3}runs {arm:9s} dose {dose:>4} -> "
+                    print(f"{item} +{run_offset:>3}runs {arm:9s} alpha {dose:>4} -> "
                           f"{result['stop_reason']:6s} {len(result['generated']):4d} tok "
                           f"think_closed={stats['closed_think']}", flush=True)
             cp._write_json(path, item_rows)
@@ -210,17 +243,43 @@ def run(
 def write_pack(root: Path, out: Path, rows: list[dict], config: dict) -> Path:
     pack = out / "pack"
     pack.mkdir(exist_ok=True)
-    table = pa.Table.from_pylist(rows)
-    pq.write_table(table, pack / "results.parquet")
+    task_rows = {}
+    result_rows = []
+    for row in rows:
+        require("task_record" in row and "task_prompt" in row and "response_text" in row,
+                "shards do not include raw responses and task records; choose a fresh output "
+                "directory and regenerate")
+        row = dict(row)
+        item = row["item_id"]
+        record = row.pop("task_record")
+        prompt = row.pop("task_prompt")
+        task_row = {
+            **record,
+            "source_item_id": record["item_id"],
+            "item_id": item,
+            "task_prompt": prompt,
+        }
+        if item in task_rows:
+            require(task_rows[item] == task_row,
+                    f"{item}: inconsistent task record or prompt across responses")
+        else:
+            task_rows[item] = task_row
+        result_rows.append(row)
+    pq.write_table(pa.Table.from_pylist(result_rows), pack / "results.parquet")
+    pq.write_table(
+        pa.Table.from_pylist([task_rows[item] for item in sorted(task_rows)]),
+        pack / "tasks.parquet",
+    )
     manifest = {
-        "format": "stop-unconfounded-injection-v1",
+        "format": "stop-unconfounded-injection-v2",
         "n_rows": len(rows),
         "n_items": len({r["item_id"] for r in rows}),
         "config": config,
         "code_sha256": {
             f"code/dev/schema_llm/explore/stop_steering/{f}": cp._sha(
                 root / "code/dev/schema_llm/explore/stop_steering" / f)
-            for f in ("inject.py", "pilot.py", "gate.py", "runframe.py", "unconfounded_data.py")
+            for f in ("inject.py", "pilot.py", "gate.py", "runframe.py",
+                      "unconfounded_data.py", "unconfounded_generate.py")
         },
     }
     cp._write_json(pack / "manifest.json", manifest)
@@ -238,9 +297,13 @@ def main() -> None:
     p.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[5])
     p.add_argument("--out", type=Path)
     p.add_argument("--device", default="cuda:0")
-    p.add_argument("--arms", nargs="+", default=list(ARMS), choices=("stop", "shuffled", "solved"))
+    p.add_argument("--arms", nargs="+", default=list(ARMS), choices=("stop", "shuffled"))
     p.add_argument("--doses", nargs="+", type=float, default=list(DOSES))
-    p.add_argument("--budget", type=int, default=BUDGET)
+    p.add_argument(
+        "--budget", type=int, default=BUDGET,
+        help=f"generated-token budget; <=0 uses the remaining capacity to the "
+             f"{CORPUS_CAP}-token completion cap",
+    )
     p.add_argument("--layer", type=int, default=LAYER)
     p.add_argument("--schedule", default=SCHEDULE, choices=("sustained", "once"))
     p.add_argument(
@@ -259,6 +322,8 @@ def main() -> None:
         "skips building the pack. Omit for the full run (default).",
     )
     args = p.parse_args()
+    require(args.layer == LAYER,
+            f"the supplied core STOP vector is for layer {LAYER}, not {args.layer}")
     root = args.root.resolve()
     os.chdir(root)
     from ..reproduction import verify
@@ -276,11 +341,10 @@ def main() -> None:
             p.error(str(e))
     if args.check_only:
         ud.load_tokens(root)
-        ud.load_vectors(root)
-        ud.load_gold(root)
-        if "shuffled" in args.arms:
-            require((root / SHUFFLED_NPZ).exists(),
-                    f"missing {SHUFFLED_NPZ}; run unconfounded_capture.py first")
+        supplied = ud.load_vectors(root)
+        for arm in args.arms:
+            arm_vector_and_dose_unit(root, arm, supplied)
+        ud.load_task_records(root)
         print(f"Unconfounded injection inputs verified: {len(population)} items, "
               f"{len(args.run_offsets)} run-offsets x "
               f"{len(args.arms) * len(args.doses) + 1} arm/dose combos each "
@@ -292,7 +356,7 @@ def main() -> None:
         raise ValueError(
             "injection requires NVIDIA CUDA; use --check-only for input validation"
         )
-    out = (args.out or root / "results/stop-unconfounded-injection").resolve()
+    out = (args.out or root / "results/stop-unconfounded-injection-v2").resolve()
     pack = run(
         root, out, args.device,
         arms=tuple(args.arms), doses=tuple(args.doses),

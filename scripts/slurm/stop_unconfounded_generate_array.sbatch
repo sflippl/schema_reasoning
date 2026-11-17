@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Slurm array job: each array task injects into an explicit, contiguous block of the 84-item
+# Slurm array job: each array task injects into an explicit, contiguous block of the
 # injectable population (``unconfounded_data.load_population``) -- sharding only ever splits
 # items, never arms/doses; every array task still runs the FULL arm/dose plan (control + every
 # requested arm x dose) for its own items -- and writes content-addressed shard files under
@@ -28,9 +28,9 @@ set -euo pipefail
 
 ROOT="${STOP_ROOT:?set STOP_ROOT to the repo checkout path}"
 OUT="${STOP_OUT:?set STOP_OUT to the shared output directory}"
-ARMS="${STOP_ARMS:-stop shuffled}"
-DOSES="${STOP_DOSES:-0.25 0.5 1.0}"
-BUDGET="${STOP_BUDGET:-2048}"
+ARMS="${STOP_ARMS:-stop}"
+DOSES="${STOP_DOSES:-0.25 0.5}"
+BUDGET="${STOP_BUDGET:--1}"
 RUN_OFFSETS="${STOP_RUN_OFFSETS:-0 30}"
 ARRAY_INDEX="${SLURM_ARRAY_TASK_ID:?this script must run as a Slurm array task (sbatch --array=0-N)}"
 ARRAY_SIZE="${SLURM_ARRAY_TASK_COUNT:-${STOP_ARRAY_SIZE:?set STOP_ARRAY_SIZE if your Slurm version does not export SLURM_ARRAY_TASK_COUNT}}"
@@ -63,7 +63,12 @@ if [ "$END" -ge "$TOTAL_ITEMS" ]; then
   END=$((TOTAL_ITEMS - 1))
 fi
 TASK_INDICES="$START-$END"
-echo "Array task $ARRAY_INDEX/$ARRAY_SIZE injecting population positions $TASK_INDICES (of $TOTAL_ITEMS), arms=[$ARMS] doses=[$DOSES] run_offsets=[$RUN_OFFSETS]."
+if [ "$BUDGET" -le 0 ]; then
+  BUDGET_LABEL="remaining-to-8192-completion-cap"
+else
+  BUDGET_LABEL="$BUDGET generated tokens"
+fi
+echo "Array task $ARRAY_INDEX/$ARRAY_SIZE injecting population positions $TASK_INDICES (of $TOTAL_ITEMS), arms=[$ARMS] alphas=[$DOSES] run_offsets=[$RUN_OFFSETS], budget=$BUDGET_LABEL."
 
 # shellcheck disable=SC2086
 python -m dev.schema_llm.explore.stop_steering.unconfounded_generate \

@@ -53,7 +53,7 @@ def _config(root: Path, device: str, budget: int, run_offsets: tuple[int, ...],
     from ..reproduction import _runtime
 
     return {
-        "format": "stop-unconfounded-prompt-injection-v1",
+        "format": "stop-unconfounded-prompt-injection-v2",
         "corpus": "unconfounded-d1",
         "population_sha256": cp._sha(root / ud.POPULATION_CSV),
         "runtime": _runtime(),
@@ -115,6 +115,7 @@ def run(
 
     tokens = ud.load_tokens(root)
     gold = ud.load_gold(root)
+    task_records = ud.load_task_records(root)
     prompt_lens = inject.prompt_lengths(tokens)
     spec = active_model()
     eos = set(spec.eos_ids)
@@ -130,6 +131,10 @@ def run(
             lm = load_model(spec.model, revision=spec.revision, device_map=device)
         trace = ud.build_trace(tokens, item)
         ids = inject.load_ids(tokens, item)
+        task = task_records[item]
+        task_prompt = lm.tokenizer.decode(
+            ids[:int(prompt_lens[item])], skip_special_tokens=False
+        )
         item_rows = []
         encoded = [(name, text, encode_insertion(lm.tokenizer, text))
                    for name, text in INSERTIONS]
@@ -149,8 +154,18 @@ def run(
                 )
                 tail_ids = inserted_ids + result["generated"]
                 stats = pilot.tail_stats(lm.tokenizer, tail_ids, prefix_text, gold[item])
+                # The legacy pair-completeness metric expects `canonical`, absent from D1 gold.
+                stats.pop("pairs_complete", None)
+                response_ids = (
+                    ids[int(prompt_lens[item]):prefix_len].tolist() + tail_ids
+                )
+                response_text = lm.tokenizer.decode(
+                    response_ids, skip_special_tokens=False
+                )
                 item_rows.append(dict(
                     item_id=item,
+                    task_record=task,
+                    task_prompt=task_prompt,
                     run_offset=run_offset,
                     condition=condition,
                     insertion_text=text,
@@ -165,6 +180,7 @@ def run(
                     stop_reason=result["stop_reason"],
                     n_generated=len(result["generated"]),
                     generated_ids=result["generated"],
+                    response_text=response_text,
                     terminated=result["stop_reason"] == "eos",
                     **stats,
                 ))
@@ -185,9 +201,35 @@ def run(
 def write_pack(root: Path, out: Path, rows: list[dict], config: dict) -> Path:
     pack = out / "pack"
     pack.mkdir(exist_ok=True)
-    pq.write_table(pa.Table.from_pylist(rows), pack / "results.parquet")
+    task_rows = {}
+    result_rows = []
+    for row in rows:
+        require("task_record" in row and "task_prompt" in row and "response_text" in row,
+                "shards predate raw-response/task capture; use a new output directory and "
+                "regenerate the array shards")
+        row = dict(row)
+        item = row["item_id"]
+        record = row.pop("task_record")
+        prompt = row.pop("task_prompt")
+        task_row = {
+            **record,
+            "source_item_id": record["item_id"],
+            "item_id": item,
+            "task_prompt": prompt,
+        }
+        if item in task_rows:
+            require(task_rows[item] == task_row,
+                    f"{item}: inconsistent task record or prompt across generated responses")
+        else:
+            task_rows[item] = task_row
+        result_rows.append(row)
+    pq.write_table(pa.Table.from_pylist(result_rows), pack / "results.parquet")
+    pq.write_table(
+        pa.Table.from_pylist([task_rows[item] for item in sorted(task_rows)]),
+        pack / "tasks.parquet",
+    )
     manifest = {
-        "format": "stop-unconfounded-prompt-injection-v1",
+        "format": "stop-unconfounded-prompt-injection-v2",
         "n_rows": len(rows),
         "n_items": len({row["item_id"] for row in rows}),
         "config": config,
@@ -241,7 +283,7 @@ def main() -> None:
             parser.error(str(error))
     if args.check_only:
         ud.load_tokens(root)
-        ud.load_gold(root)
+        ud.load_task_records(root)
         print(f"Prompt-injection inputs verified: {len(population)} items, "
               f"{len(args.run_offsets)} offsets x {len(INSERTIONS)} conditions each; "
               "no weights/GPU used.")
@@ -251,7 +293,7 @@ def main() -> None:
 
         if not torch.cuda.is_available():
             raise ValueError("prompt-injection generation requires NVIDIA CUDA")
-    out = (args.out or root / "results/stop-unconfounded-prompt-injection").resolve()
+    out = (args.out or root / "results/stop-unconfounded-prompt-injection-v2").resolve()
     run(root, out, device=args.device, budget=args.budget,
         run_offsets=tuple(args.run_offsets), task_indices=task_indices)
 
