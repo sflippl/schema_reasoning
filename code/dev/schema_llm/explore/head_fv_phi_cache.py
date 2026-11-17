@@ -39,6 +39,25 @@ def _prepare_without_reset(
     )
 
 
+def _longrope_factors(config):
+    """Return LongRoPE factor lists across Transformers config attribute conventions."""
+    params = getattr(config, "rope_parameters", None)
+    if not isinstance(params, dict):
+        params = getattr(config, "rope_scaling", None)
+    if not isinstance(params, dict):
+        raise ValueError("Phi cache compatibility requires LongRoPE configuration")
+    rope_type = params.get("rope_type", params.get("type"))
+    short_factor = params.get("short_factor")
+    long_factor = params.get("long_factor")
+    if (
+        rope_type != "longrope" or not short_factor or not long_factor
+        or short_factor != long_factor
+        or any(not math.isfinite(x) or x <= 0 for x in short_factor)
+    ):
+        raise ValueError("cache compatibility requires identical positive short/long factors")
+    return short_factor
+
+
 def _checked_rotary(lm):
     model = lm.model
     spec = active_model()
@@ -51,18 +70,12 @@ def _checked_rotary(lm):
         )
     if not isinstance(model, Phi3ForCausalLM):
         raise ValueError("cache compatibility is limited to the inspected Phi3 implementation")
-    params = model.config.rope_parameters
-    if (
-        params.get("rope_type") != "longrope" or not params.get("short_factor")
-        or params["short_factor"] != params.get("long_factor")
-        or any(not math.isfinite(x) or x <= 0 for x in params["short_factor"])
-    ):
-        raise ValueError("cache compatibility requires identical positive short/long factors")
+    short_factor = _longrope_factors(model.config)
     rotary = model.model.rotary_emb
     original = rotary.original_inv_freq
     if (
         original.dtype != torch.float32 or original.ndim != 1
-        or original.numel() != len(params["short_factor"]) or not torch.isfinite(original).all()
+        or original.numel() != len(short_factor) or not torch.isfinite(original).all()
     ):
         raise ValueError("unexpected initialized rotary basis")
     return model, rotary

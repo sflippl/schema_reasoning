@@ -3,6 +3,50 @@ from types import SimpleNamespace
 from dev.schema_llm.explore import head_fv_phi_cache
 
 
+def test_longrope_factors_accept_older_rope_scaling_config():
+    factors = [1.0, 2.0]
+    config = SimpleNamespace(
+        rope_scaling={
+            "type": "longrope",
+            "short_factor": factors,
+            "long_factor": factors.copy(),
+        }
+    )
+
+    assert head_fv_phi_cache._longrope_factors(config) == factors
+
+
+def test_longrope_factors_prefer_rope_parameters_when_available():
+    factors = [1.0, 2.0]
+    config = SimpleNamespace(
+        rope_parameters={
+            "rope_type": "longrope",
+            "short_factor": factors,
+            "long_factor": factors.copy(),
+        },
+        rope_scaling={"type": "unsupported"},
+    )
+
+    assert head_fv_phi_cache._longrope_factors(config) == factors
+
+
+def test_longrope_factors_reject_different_short_and_long_factors():
+    config = SimpleNamespace(
+        rope_scaling={
+            "type": "longrope",
+            "short_factor": [1.0, 2.0],
+            "long_factor": [1.0, 3.0],
+        }
+    )
+
+    try:
+        head_fv_phi_cache._longrope_factors(config)
+    except ValueError as error:
+        assert "identical positive short/long factors" in str(error)
+    else:
+        raise AssertionError("different LongRoPE factors must be rejected")
+
+
 def test_stable_phi_rotary_pins_and_restores_without_generation_source_check(monkeypatch):
     original = object()
     previous_inv = object()
