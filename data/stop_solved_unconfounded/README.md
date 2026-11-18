@@ -81,4 +81,38 @@ a different gold schema and would be misleading for D1.
 
 The **control** condition is the paired no-insertion baseline at each location; there is no
 additional, separately generated baseline arm.
+
+## Qwen3-4B
+
+With the same activated environment and Slurm setup, submit the Qwen STOP-vector and prompt
+experiments separately:
+
+```bash
+bash scripts/slurm/submit_stop_unconfounded_qwen.sh
+bash scripts/slurm/submit_stop_unconfounded_prompt_qwen.sh
+```
+
+Each submits an array and a dependent merge. These wrappers set `SCHEMA_HEAD_FV_MODEL=qwen34b`,
+use the Qwen-specific T_solved table and layer-16 STOP vector, and write to
+`results/stop-unconfounded-injection-qwen34b-v2/` and
+`results/stop-unconfounded-prompt-injection-qwen34b-v2/`, respectively. The standard
+`STOP_OUT`, `STOP_PROMPT_OUT`, dose, offset, budget, account, and partition overrides still apply.
+The default offsets yield 118 eligible Qwen items and 708 rows per experiment. This is a
+model-specific judge-solved population, not the same 84 Phi traces; the populations should not
+be treated as item-paired without an explicit join.
+
+The release manifest changes with this model support. Existing vector-run output directories
+created against the previous manifest cannot be resumed or re-merged with the updated code:
+their saved `generation.json` pins the previous release hash. Keep those packs for analysis,
+and use a fresh output directory for a new vector run.
+
+To check the supplied Qwen table and its run coordinates against the token data before submitting,
+run:
+
+```bash
+SCHEMA_HEAD_FV_MODEL=qwen34b PYTHONPATH=code \
+  python -m dev.schema_llm.explore.stop_steering.unconfounded_generate --check-only
+SCHEMA_HEAD_FV_MODEL=qwen34b PYTHONPATH=code \
+  python -m dev.schema_llm.explore.stop_steering.prompt_injection --check-only
+```
     
