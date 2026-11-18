@@ -101,10 +101,10 @@ The default offsets yield 118 eligible Qwen items and 708 rows per experiment. T
 model-specific judge-solved population, not the same 84 Phi traces; the populations should not
 be treated as item-paired without an explicit join.
 
-The release manifest changes with this model support. Existing vector-run output directories
-created against the previous manifest cannot be resumed or re-merged with the updated code:
-their saved `generation.json` pins the previous release hash. Keep those packs for analysis,
-and use a fresh output directory for a new vector run.
+Neither STOP workflow requires the repository-wide `MANIFEST.json`. Vector runs still check
+their population and vector hashes and generation settings against `generation.json` before
+reusing shards. On resume or merge, the old `release` field is ignored; the other
+settings must still match. The manifest written inside each output pack remains as provenance.
 
 To check the supplied Qwen table and its run coordinates against the token data before submitting,
 run:

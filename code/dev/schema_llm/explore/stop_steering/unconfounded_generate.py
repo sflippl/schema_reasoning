@@ -79,6 +79,18 @@ def completion_budget(response_prefix_tokens: int, budget: int = BUDGET) -> int:
     return CORPUS_CAP - response_prefix_tokens
 
 
+def _bind_generation_config(out: Path, config: dict) -> None:
+    state = out / "generation.json"
+    if state.exists():
+        saved = cp._json(state)
+        # Older runs pinned the whole release, including files unrelated to generation.
+        saved.pop("release", None)
+        require(saved == config, "generation inputs/settings changed; choose a new output folder")
+    else:
+        out.mkdir(parents=True, exist_ok=True)
+        cp._write_json(state, config)
+
+
 RUN_OFFSETS = (0, 30)  # T_solved itself, and 30 runs after it (the supplied protocol's default)
 
 
@@ -129,7 +141,6 @@ def run(
 
     config = {
         "corpus": "unconfounded-d1",
-        "release": cp._sha(root / "MANIFEST.json"),
         "population_sha256": cp._sha(root / ud.population_path()),
         "vectors_sha256": cp._sha(root / ud.vectors_path()),
         "runtime": _runtime(),
@@ -152,13 +163,7 @@ def run(
     if active_model().key != "phi4mr":
         config["model"] = active_model().key
         config["model_revision"] = active_model().revision
-    state = out / "generation.json"
-    if state.exists():
-        if cp._json(state) != config:
-            raise ValueError("generation inputs/settings changed; choose a new output folder")
-    else:
-        out.mkdir(parents=True, exist_ok=True)
-        cp._write_json(state, config)
+    _bind_generation_config(out, config)
 
     tokens = ud.load_tokens(root)
     gold = ud.load_gold(root)
@@ -332,9 +337,6 @@ def main() -> None:
             f"the supplied core STOP vector is for layer {LAYER}, not {args.layer}")
     root = args.root.resolve()
     os.chdir(root)
-    from ..reproduction import verify
-
-    verify(root)
     population = ud.load_population(root, min_runs_after_solved=max(args.run_offsets))
     if args.population_size:
         print(len(population))

@@ -1,5 +1,6 @@
 """Model-specific inputs and Slurm submission for unconfounded experiments."""
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -49,6 +50,30 @@ def test_rejects_incorrect_solved_coordinates(monkeypatch):
     target["solved_position_abs"] += 1
     with pytest.raises(ValueError, match="solved coordinates disagree"):
         data.validate_trace(trace, target)
+
+
+def test_vector_population_size_without_release_manifest(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("SCHEMA_HEAD_FV_MODEL", "qwen34b")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").symlink_to(ROOT / "data", target_is_directory=True)
+    monkeypatch.setattr("sys.argv", ["unconfounded_generate", "--root", str(tmp_path),
+                                    "--population-size"])
+    generate.main()
+    assert capsys.readouterr().out.strip() == "118"
+
+
+def test_vector_resume_ignores_only_legacy_release_hash(tmp_path):
+    config = {"population_sha256": "population", "vectors_sha256": "vector", "budget": -1}
+    generate._bind_generation_config(tmp_path, config)
+    state = tmp_path / "generation.json"
+    assert json.loads(state.read_text()) == config
+    legacy = {**config, "release": "old-release"}
+    state.write_text(json.dumps(legacy))
+    generate._bind_generation_config(tmp_path, config)
+    assert json.loads(state.read_text()) == legacy
+    for changed in ("population_sha256", "vectors_sha256", "budget"):
+        with pytest.raises(ValueError, match="generation inputs/settings changed"):
+            generate._bind_generation_config(tmp_path, {**config, changed: "different"})
 
 
 @pytest.mark.parametrize(
