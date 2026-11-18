@@ -1,6 +1,6 @@
 """Compare literal prompt-text insertions with an unmodified resumed continuation.
 
-The prompt-only conditions use the unconfounded D1 Phi-4-mini-reasoning population: judge-solved,
+The prompt-only conditions use the selected model's unconfounded D1 population: judge-solved,
 terminated traces with more than 30 runs remaining after T_solved. Each item is resumed at the
 run end at T_solved and 30 runs later. At each location, the control, literal ``</think>`` and
 literal ``Final answer:`` conditions share the same stored prefix and greedy generation budget.
@@ -18,6 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .. import combined_primitives as cp
+from ..head_fv_models import active as active_model
 from ..tsp_generate import parse_task_indices
 from . import unconfounded_data as ud
 
@@ -52,10 +53,10 @@ def _config(root: Path, device: str, budget: int, run_offsets: tuple[int, ...],
             population_size: int) -> dict:
     from ..reproduction import _runtime
 
-    return {
+    config = {
         "format": "stop-unconfounded-prompt-injection-v2",
         "corpus": "unconfounded-d1",
-        "population_sha256": cp._sha(root / ud.POPULATION_CSV),
+        "population_sha256": cp._sha(root / ud.population_path()),
         "runtime": _runtime(),
         "device": device,
         "dtype": "bfloat16",
@@ -66,6 +67,10 @@ def _config(root: Path, device: str, budget: int, run_offsets: tuple[int, ...],
         "generation": "greedy",
         "insertions": [{"condition": name, "text": text} for name, text in INSERTIONS],
     }
+    if active_model().key != "phi4mr":
+        config["model"] = active_model().key
+        config["model_revision"] = active_model().revision
+    return config
 
 
 def run(
@@ -77,8 +82,6 @@ def run(
     task_indices: list[int] | None = None,
 ) -> Path | None:
     """Generate an item shard, or merge completed shards when ``task_indices`` is omitted."""
-    from ..head_fv_models import active as active_model
-
     population = ud.load_population(root, min_runs_after_solved=max(run_offsets))
     if task_indices is not None:
         bad = [i for i in task_indices if not 0 <= i < len(population)]
@@ -130,6 +133,7 @@ def run(
         if lm is None:
             lm = load_model(spec.model, revision=spec.revision, device_map=device)
         trace = ud.build_trace(tokens, item)
+        ud.validate_trace(trace, target)
         ids = inject.load_ids(tokens, item)
         task = task_records[item]
         task_prompt = lm.tokenizer.decode(
@@ -282,7 +286,9 @@ def main() -> None:
         except ValueError as error:
             parser.error(str(error))
     if args.check_only:
-        ud.load_tokens(root)
+        tokens = ud.load_tokens(root)
+        for _, target in population.iterrows():
+            ud.validate_trace(ud.build_trace(tokens, target["item_id"]), target)
         ud.load_task_records(root)
         print(f"Prompt-injection inputs verified: {len(population)} items, "
               f"{len(args.run_offsets)} offsets x {len(INSERTIONS)} conditions each; "
@@ -293,7 +299,9 @@ def main() -> None:
 
         if not torch.cuda.is_available():
             raise ValueError("prompt-injection generation requires NVIDIA CUDA")
-    out = (args.out or root / "results/stop-unconfounded-prompt-injection-v2").resolve()
+    default_out = ("stop-unconfounded-prompt-injection-v2" if active_model().key == "phi4mr"
+                   else f"stop-unconfounded-prompt-injection-{active_model().key}-v2")
+    out = (args.out or root / "results" / default_out).resolve()
     run(root, out, device=args.device, budget=args.budget,
         run_offsets=tuple(args.run_offsets), task_indices=task_indices)
 

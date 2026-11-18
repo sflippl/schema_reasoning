@@ -2,7 +2,7 @@
 
 This is a SEPARATE corpus from the one ``runframe.py``/``pilot.py``/``inject.py`` were written
 against (``results/schema_llm/export/20260824-rlreasoning_v1``, bound via ``configure()``).
-The new corpus is D1 of ``20260915-binding_dyn_d1_v3w2`` (300 phi4mr items; see
+The new corpus is D1 of ``20260915-binding_dyn_d1_v3w2`` (300 items per model; see
 ``data/stop_solved_unconfounded/README.md``), already present in this repo as
 ``data/vstop/core/D1-tokens.parquet`` and (for gold answers) ``data/primitives/tasks.parquet``
 (``corpus == "d1"``). Its STOP-approach direction/metadata were computed externally and shipped
@@ -24,13 +24,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ..head_fv_models import active as active_model
 from . import runframe
 
-MODEL = "phi4mr"
 RUN_OFFSET = 30  # inject at the run end this many runs after T_solved (protocol section 4)
 CORPUS_DIR = Path("data/stop_solved_unconfounded")
-VECTORS_PATH = Path("data/stop_vectors/phi4mr/stop_vector_phi4mr.npz")
-POPULATION_CSV = CORPUS_DIR / "t_solved_per_trace_phi4mr_unconfounded.csv"
 TOKENS_PATH = Path("data/vstop/core/D1-tokens.parquet")
 GOLD_TASKS_PATH = Path("data/primitives/tasks.parquet")
 GOLD_CORPUS = "d1"
@@ -41,9 +39,18 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def population_path() -> Path:
+    return CORPUS_DIR / f"t_solved_per_trace_{active_model().key}_unconfounded.csv"
+
+
+def vectors_path() -> Path:
+    model = active_model().key
+    return Path(f"data/stop_vectors/{model}/stop_vector_{model}.npz")
+
+
 def load_vectors(root: Path) -> dict:
     """The supplied direction vectors/dose units, as plain Python/NumPy values."""
-    with np.load(root / VECTORS_PATH) as data:
+    with np.load(root / vectors_path()) as data:
         return {k: data[k] for k in data.files}
 
 
@@ -57,20 +64,35 @@ def load_population(root: Path, min_runs_after_solved: int = RUN_OFFSET) -> pd.D
     build the shuffled-label null -- that only needs ``reaches_solved`` (89 items), not injection
     feasibility.
     """
-    table = pd.read_csv(root / POPULATION_CSV)
-    require((table["model"] == MODEL).all(), "unexpected model in population csv")
+    model = active_model().key
+    table = pd.read_csv(root / population_path())
+    required = {"model", "item_id", "reaches_solved", "solved_token_index",
+                "solved_run_index", "solved_position_abs", "end_token_index",
+                "end_run_index", "end_position_abs", "runs_after_solved",
+                "think_tokens", "think_runs", "terminated"}
+    require(required <= set(table.columns), f"population csv missing columns: {sorted(required - set(table.columns))}")
+    require(not table.empty and (table["model"] == model).all(),
+            f"unexpected model or empty population csv for {model}")
+    require(table["item_id"].notna().all() and table["item_id"].is_unique,
+            "population csv has missing or duplicate item IDs")
+    require(table["reaches_solved"].isin([True, False]).all()
+            and table["terminated"].isin([True, False]).all(),
+            "population csv contains invalid boolean flags")
     table = table[table["reaches_solved"] & (table["runs_after_solved"] > min_runs_after_solved)]
-    require(len(table), "empty population")
+    require(len(table) and table["terminated"].all(), "empty or non-terminating population")
+    require(table[list(required - {"model", "item_id"})].notna().all().all(),
+            "eligible population contains missing values")
     return table.sort_values("item_id").reset_index(drop=True)
 
 
 def load_tokens(root: Path) -> pd.DataFrame:
-    """D1's phi4mr tokens, with the columns ``inject.py``'s resume/prompt-length helpers need."""
+    """D1 tokens for the selected model, with the columns needed by the resume harness."""
     columns = ["item_id", "task_family", "model", "position", "token_id", "token", "segment",
                "metacluster_L16"]
     tokens = pd.read_parquet(root / TOKENS_PATH, columns=columns)
-    tokens = tokens[(tokens.model == MODEL) & (tokens.task_family == runframe.TASK)]
-    require(len(tokens), "empty D1 phi4mr token slice")
+    model = active_model().key
+    tokens = tokens[(tokens.model == model) & (tokens.task_family == runframe.TASK)]
+    require(len(tokens), f"empty D1 {model} token slice")
     return tokens
 
 
@@ -92,8 +114,29 @@ def build_trace(tokens: pd.DataFrame, item: str) -> runframe.Trace:
     while n > 0 and text[n - 1] in runframe.MARK:
         n -= 1
     require(n >= runframe.MIN_RUNS, f"{item}: too few think tokens after trim")
-    return runframe.Trace(model=MODEL, item=item, z=z[:n], pos=pos[:n], tokens=text[:n],
+    return runframe.Trace(model=active_model().key, item=item, z=z[:n], pos=pos[:n], tokens=text[:n],
                           raw=raw[:n], stripped=len(text) - n, terminating=True)
+
+
+def validate_trace(trace: runframe.Trace, target) -> None:
+    """Check that the supplied solved coordinates describe this model's actual trace."""
+    _, starts, durations = runframe.runs_of(trace.z)
+    ends = starts + durations - 1
+    token = int(target["solved_token_index"])
+    run = int(target["solved_run_index"])
+    item = trace.item
+    require(len(trace.pos) == int(target["think_tokens"]) and len(starts) == int(target["think_runs"]),
+            f"{item}: trace dimensions disagree with population csv")
+    require(0 <= token < len(trace.pos) and 0 <= run < len(starts),
+            f"{item}: solved coordinates are out of range")
+    require(starts[run] <= token <= ends[run]
+            and trace.pos[token] == int(target["solved_position_abs"]),
+            f"{item}: solved coordinates disagree with token data")
+    require(trace.pos[-1] == int(target["end_position_abs"])
+            and int(target["end_token_index"]) == len(trace.pos) - 1
+            and int(target["end_run_index"]) == len(starts) - 1
+            and int(target["runs_after_solved"]) == len(starts) - 1 - run,
+            f"{item}: end coordinates disagree with token data")
 
 
 def injection_prefix_len(trace: runframe.Trace, solved_run_index: int,

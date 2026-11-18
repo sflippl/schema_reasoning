@@ -1,13 +1,13 @@
 """Inject the primitive-centered core STOP direction (and optionally its supplied shuffled null).
 
 Parallel to ``tsp_generate.py`` in shape (resumable ``--task-indices`` shards over an item
-population, a separate merge step building the final pack), but injecting into the unconfounded
-corpus's own 84-item population (``unconfounded_data.load_population``) instead of generating new
+population, a separate merge step building the final pack), but injecting into the selected
+model's unconfounded corpus population (``unconfounded_data.load_population``) instead of generating new
 TSP responses. Reuses the existing resume/injection harness (``inject.resume_generate``) and continuation
 diagnostics (``pilot.tail_stats``) -- only the vector, dose unit, population and injection position
 are specific to this corpus.
 
-Vector: ``u_stop`` from ``data/stop_vectors/phi4mr/stop_vector_phi4mr.npz``. This is the core
+Vector: the selected model's ``u_stop`` from ``data/stop_vectors``. This is the core
 direction with primitive/metacluster means subtracted; its dose unit is the paired ``dose_sd``.
 At each generated token, inject ``alpha * dose_sd * u_stop``. A no-injection resumed control is
 included for every location.
@@ -27,8 +27,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .. import combined_primitives as cp
+from ..head_fv_models import active as active_model
 from ..tsp_generate import parse_task_indices
-from . import inject, pilot
 from . import unconfounded_data as ud
 
 ARMS = ("stop",)
@@ -51,22 +51,24 @@ def shard_path(out: Path, item: str) -> Path:
 
 def arm_vector_and_dose_unit(root: Path, arm: str, supplied: dict) -> tuple[np.ndarray, float]:
     """Return a unit vector and its supplied residual-scale dose unit."""
+    spec = active_model()
+    require(supplied["model"].item() == spec.key, f"STOP vector model is not {spec.key}")
+    require(supplied["layer"].item() == f"L{LAYER}", f"STOP vector layer must be L{LAYER}")
     if arm == "stop":
         vector = supplied["u_stop"]
         dose_unit = float(supplied["dose_sd"])
         require(np.isclose(np.linalg.norm(vector), 1.0, atol=1e-5),
                 "core STOP vector u_stop is not unit norm")
-        require(supplied["model"].item() == "phi4mr", "STOP vector model is not phi4mr")
-        require(supplied["layer"].item() == f"L{LAYER}",
-                f"STOP vector layer must be L{LAYER}")
-        return vector, dose_unit
-    if arm == "shuffled":
+    elif arm == "shuffled":
         vector = supplied["u_stop_shuffled"]
         dose_unit = float(supplied["dose_sd_shuffled"])
         require(np.isclose(np.linalg.norm(vector), 1.0, atol=1e-5),
                 "shuffled STOP vector is not unit norm")
-        return vector, dose_unit
-    raise ValueError(f"unknown arm: {arm}")
+    else:
+        raise ValueError(f"unknown arm: {arm}")
+    require(vector.shape == (spec.hidden_size,), f"STOP vector width is not {spec.hidden_size}")
+    require(np.isfinite(dose_unit) and dose_unit > 0, "STOP vector dose unit must be positive")
+    return vector, dose_unit
 
 
 def completion_budget(response_prefix_tokens: int, budget: int = BUDGET) -> int:
@@ -107,8 +109,8 @@ def run(
     restrictive offset), so every item in it is guaranteed usable at every smaller offset too.
     """
     from ...core.model import load_model
-    from ..head_fv_models import active as active_model
     from ..reproduction import _runtime
+    from . import inject, pilot
 
     population = ud.load_population(root, min_runs_after_solved=max(run_offsets))
     require(layer == LAYER, f"the supplied core STOP vector is for layer {LAYER}, not {layer}")
@@ -128,8 +130,8 @@ def run(
     config = {
         "corpus": "unconfounded-d1",
         "release": cp._sha(root / "MANIFEST.json"),
-        "population_sha256": cp._sha(root / ud.POPULATION_CSV),
-        "vectors_sha256": cp._sha(root / ud.VECTORS_PATH),
+        "population_sha256": cp._sha(root / ud.population_path()),
+        "vectors_sha256": cp._sha(root / ud.vectors_path()),
         "runtime": _runtime(),
         "device": device,
         "dtype": "bfloat16",
@@ -141,12 +143,15 @@ def run(
         "doses": list(doses),
         "run_offsets": list(run_offsets),
         "smoke": smoke,
-        "vector_file": str(ud.VECTORS_PATH),
+        "vector_file": str(ud.vectors_path()),
         "vector_key": "u_stop",
         "vector_variant": "core (primitive/metacluster-centered)",
         "dose_unit_key": "dose_sd",
         "dose_unit": arm_specs["stop"][1] if "stop" in arm_specs else None,
     }
+    if active_model().key != "phi4mr":
+        config["model"] = active_model().key
+        config["model_revision"] = active_model().revision
     state = out / "generation.json"
     if state.exists():
         if cp._json(state) != config:
@@ -173,6 +178,7 @@ def run(
             if lm is None:
                 lm = load_model(spec.model, revision=spec.revision, device_map=device)
             trace = ud.build_trace(tokens, item)
+            ud.validate_trace(trace, target)
             ids = inject.load_ids(tokens, item)
             task = task_records[item]
             task_prompt = lm.tokenizer.decode(
@@ -340,7 +346,9 @@ def main() -> None:
         except ValueError as e:
             p.error(str(e))
     if args.check_only:
-        ud.load_tokens(root)
+        tokens = ud.load_tokens(root)
+        for _, target in population.iterrows():
+            ud.validate_trace(ud.build_trace(tokens, target["item_id"]), target)
         supplied = ud.load_vectors(root)
         for arm in args.arms:
             arm_vector_and_dose_unit(root, arm, supplied)
@@ -356,7 +364,9 @@ def main() -> None:
         raise ValueError(
             "injection requires NVIDIA CUDA; use --check-only for input validation"
         )
-    out = (args.out or root / "results/stop-unconfounded-injection-v2").resolve()
+    default_out = ("stop-unconfounded-injection-v2" if active_model().key == "phi4mr"
+                   else f"stop-unconfounded-injection-{active_model().key}-v2")
+    out = (args.out or root / "results" / default_out).resolve()
     pack = run(
         root, out, args.device,
         arms=tuple(args.arms), doses=tuple(args.doses),

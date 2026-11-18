@@ -69,5 +69,5 @@ Track progress with:
   tail -f $SLURM_DIR/logs/stop-unconf-gen_${ARRAY_JOB}_*.out
   tail -f $SLURM_DIR/logs/stop-unconf-merge_${MERGE_JOB}.out
 
-Final pack (84 items x run_offsets x (1 control + arms x doses)) lands at: $STOP_OUT/pack
+Final pack lands at: $STOP_OUT/pack
 EOF
